@@ -8,7 +8,11 @@ use fermio_rules::built_in_rules;
 use std::{fs::File, io, path::PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(name = "fermio-sec", version, about = "Fermio local-first static analysis CLI")]
+#[command(
+    name = "fermio-sec",
+    version,
+    about = "Fermio local-first static analysis CLI"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -58,11 +62,14 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Scan { path, format, output, fail_on, include_vendor } => {
-            let engine = ScanEngine::new(
-                vec![Box::new(PhpFrontend::new())],
-                built_in_rules(),
-            );
+        Command::Scan {
+            path,
+            format,
+            output,
+            fail_on,
+            include_vendor,
+        } => {
+            let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], built_in_rules());
             let result = engine.scan(&path, include_vendor)?;
             let output_format = match format {
                 FormatArg::Terminal => OutputFormat::Terminal,
@@ -78,7 +85,11 @@ fn run() -> Result<()> {
             }
 
             if let Some(threshold) = fail_on.map(Severity::from) {
-                if result.findings.iter().any(|finding| finding.severity >= threshold) {
+                if result
+                    .findings
+                    .iter()
+                    .any(|finding| finding.severity >= threshold)
+                {
                     std::process::exit(1);
                 }
             }
