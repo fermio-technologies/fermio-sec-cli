@@ -1,0 +1,14 @@
+[package]
+name = "fermio-language-php"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fermio-core = { path = "../fermio-core" }
+fermio-ir = { path = "../fermio-ir" }
+fermio-language-api = { path = "../fermio-language-api" }
+serde_json.workspace = true
+tree-sitter.workspace = true
+tree-sitter-php.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "fermio-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fermio-core = { path = "../fermio-core" }
+fermio-language-api = { path = "../fermio-language-api" }
+fermio-rules = { path = "../fermio-rules" }
+ignore.workspace = true

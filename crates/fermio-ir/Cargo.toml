@@ -1,0 +1,9 @@
+[package]
+name = "fermio-ir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fermio-core = { path = "../fermio-core" }
+serde.workspace = true

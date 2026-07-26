@@ -1,0 +1,19 @@
+[package]
+name = "fermio-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fermio-sec"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fermio-core = { path = "../fermio-core" }
+fermio-engine = { path = "../fermio-engine" }
+fermio-language-api = { path = "../fermio-language-api" }
+fermio-language-php = { path = "../fermio-language-php" }
+fermio-report = { path = "../fermio-report" }
+fermio-rules = { path = "../fermio-rules" }
