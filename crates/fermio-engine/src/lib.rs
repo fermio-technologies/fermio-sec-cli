@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use fermio_core::{Diagnostic, DiagnosticSeverity, ProjectMetadata, ScanResult, ScanStatistics};
 use fermio_language_api::{LanguageFrontend, SourceFile};
-use fermio_rules::Rule;
+use fermio_rules::{ModuleAnalysis, Rule};
 use ignore::WalkBuilder;
 use std::{
     fs,
@@ -126,8 +126,10 @@ impl ScanEngine {
                         .filter(|diagnostic| diagnostic.code == "PHP-PARSE-001")
                         .count();
                     diagnostics.extend(output.diagnostics);
+
+                    let analysis = ModuleAnalysis::new(&output.module);
                     for rule in &self.rules {
-                        findings.extend(rule.evaluate(&output.module));
+                        findings.extend(rule.evaluate(&analysis));
                     }
                 }
                 Err(error) => {
