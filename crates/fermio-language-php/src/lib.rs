@@ -124,11 +124,7 @@ fn collect_calls(node: Node<'_>, source: &[u8], path: &Path, output: &mut Vec<In
     }
 }
 
-fn collect_syntax_diagnostics(
-    node: Node<'_>,
-    path: &Path,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn collect_syntax_diagnostics(node: Node<'_>, path: &Path, diagnostics: &mut Vec<Diagnostic>) {
     if node.is_error() || node.is_missing() {
         diagnostics.push(Diagnostic {
             code: "PHP-PARSE-001".to_string(),
