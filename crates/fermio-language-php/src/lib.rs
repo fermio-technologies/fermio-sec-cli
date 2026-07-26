@@ -100,7 +100,10 @@ impl LanguageFrontend for PhpFrontend {
 }
 
 fn collect_calls(node: Node<'_>, source: &[u8], path: &Path, output: &mut Vec<Instruction>) {
-    if matches!(node.kind(), "function_call_expression" | "member_call_expression" | "scoped_call_expression") {
+    if matches!(
+        node.kind(),
+        "function_call_expression" | "member_call_expression" | "scoped_call_expression"
+    ) {
         if let Some(name) = call_name(node, source) {
             let start = node.start_position();
             let end = node.end_position();
