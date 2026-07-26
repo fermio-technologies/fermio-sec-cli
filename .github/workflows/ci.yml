@@ -23,23 +23,8 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Capture rustfmt patch
-        shell: bash
-        run: |
-          cargo fmt --all
-          git diff -- . ':!.github/workflows/ci.yml' > rustfmt.patch
-          if [ -s rustfmt.patch ]; then
-            cat rustfmt.patch
-          fi
-
-      - name: Upload rustfmt patch
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-patch
-          path: rustfmt.patch
-
       - name: Check formatting
-        run: test ! -s rustfmt.patch
+        run: cargo fmt --all -- --check
 
       - name: Run Clippy
         shell: bash
