@@ -18,6 +18,14 @@ pub enum Confidence {
     High,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceLocation {
     pub path: PathBuf,
@@ -25,6 +33,14 @@ pub struct SourceLocation {
     pub start_column: usize,
     pub end_line: usize,
     pub end_column: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub code: String,
+    pub message: String,
+    pub severity: DiagnosticSeverity,
+    pub location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +67,9 @@ pub struct ProjectMetadata {
 pub struct ScanStatistics {
     pub files_discovered: usize,
     pub files_parsed: usize,
+    pub files_skipped: usize,
     pub parse_errors: usize,
+    pub diagnostics: usize,
     pub findings: usize,
 }
 
@@ -59,5 +77,6 @@ pub struct ScanStatistics {
 pub struct ScanResult {
     pub project: ProjectMetadata,
     pub statistics: ScanStatistics,
+    pub diagnostics: Vec<Diagnostic>,
     pub findings: Vec<Finding>,
 }
