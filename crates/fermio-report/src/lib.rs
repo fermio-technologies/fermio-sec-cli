@@ -27,7 +27,11 @@ pub fn write_report(
                 "Frameworks: {}",
                 display_frameworks(&result.project.frameworks)
             )?;
-            writeln!(writer, "Files discovered: {}", result.statistics.files_discovered)?;
+            writeln!(
+                writer,
+                "Files discovered: {}",
+                result.statistics.files_discovered
+            )?;
             writeln!(writer, "Files parsed: {}", result.statistics.files_parsed)?;
             writeln!(writer, "Files skipped: {}", result.statistics.files_skipped)?;
             writeln!(writer, "Diagnostics: {}", result.statistics.diagnostics)?;
