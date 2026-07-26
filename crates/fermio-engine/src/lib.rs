@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
-use fermio_core::{
-    Diagnostic, DiagnosticSeverity, ProjectMetadata, ScanResult, ScanStatistics,
-};
+use fermio_core::{Diagnostic, DiagnosticSeverity, ProjectMetadata, ScanResult, ScanStatistics};
 use fermio_language_api::{LanguageFrontend, SourceFile};
 use fermio_rules::Rule;
 use ignore::WalkBuilder;
@@ -184,10 +182,7 @@ fn discover_files(root: &Path, options: &ScanOptions) -> Result<Vec<PathBuf>> {
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
         .map(|entry| entry.into_path())
         .filter(|path| {
-            options.include_vendor
-                || !path
-                    .components()
-                    .any(|part| part.as_os_str() == "vendor")
+            options.include_vendor || !path.components().any(|part| part.as_os_str() == "vendor")
         })
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("php"))
         .collect::<Vec<_>>();
