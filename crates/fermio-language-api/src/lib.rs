@@ -1,4 +1,5 @@
 use anyhow::Result;
+use fermio_core::Diagnostic;
 use fermio_ir::ModuleIr;
 use std::path::{Path, PathBuf};
 
@@ -15,9 +16,15 @@ pub struct ProjectDetection {
     pub confidence: u8,
 }
 
+#[derive(Debug, Clone)]
+pub struct FrontendOutput {
+    pub module: ModuleIr,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
 pub trait LanguageFrontend: Send + Sync {
     fn id(&self) -> &'static str;
     fn supports_file(&self, path: &Path) -> bool;
     fn detect_project(&self, root: &Path) -> Result<ProjectDetection>;
-    fn parse_and_lower(&self, file: &SourceFile) -> Result<ModuleIr>;
+    fn parse_and_lower(&self, file: &SourceFile) -> Result<FrontendOutput>;
 }
