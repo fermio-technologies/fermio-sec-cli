@@ -3,7 +3,10 @@ use fermio_core::{ProjectMetadata, ScanResult, ScanStatistics};
 use fermio_language_api::{LanguageFrontend, SourceFile};
 use fermio_rules::Rule;
 use ignore::WalkBuilder;
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 pub struct ScanEngine {
     frontends: Vec<Box<dyn LanguageFrontend>>,
@@ -11,10 +14,7 @@ pub struct ScanEngine {
 }
 
 impl ScanEngine {
-    pub fn new(
-        frontends: Vec<Box<dyn LanguageFrontend>>,
-        rules: Vec<Box<dyn Rule>>,
-    ) -> Self {
+    pub fn new(frontends: Vec<Box<dyn LanguageFrontend>>, rules: Vec<Box<dyn Rule>>) -> Self {
         Self { frontends, rules }
     }
 
@@ -44,7 +44,10 @@ impl ScanEngine {
             let content = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let relative = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
-            let source = SourceFile { path: relative, content };
+            let source = SourceFile {
+                path: relative,
+                content,
+            };
 
             match frontend.parse_and_lower(&source) {
                 Ok(module) => {
@@ -80,14 +83,21 @@ impl ScanEngine {
 
 fn discover_files(root: &Path, include_vendor: bool) -> Result<Vec<PathBuf>> {
     let mut builder = WalkBuilder::new(root);
-    builder.hidden(false).follow_links(false).git_ignore(true).git_global(true).git_exclude(true);
+    builder
+        .hidden(false)
+        .follow_links(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true);
 
     let files = builder
         .build()
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_some_and(|kind| kind.is_file()))
         .map(|entry| entry.into_path())
-        .filter(|path| include_vendor || !path.components().any(|part| part.as_os_str() == "vendor"))
+        .filter(|path| {
+            include_vendor || !path.components().any(|part| part.as_os_str() == "vendor")
+        })
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("php"))
         .collect();
 
