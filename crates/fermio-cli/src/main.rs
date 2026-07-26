@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fermio_core::Severity;
-use fermio_engine::ScanEngine;
+use fermio_engine::{ScanEngine, ScanOptions};
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
 use fermio_rules::built_in_rules;
@@ -31,6 +31,10 @@ enum Command {
         fail_on: Option<SeverityArg>,
         #[arg(long)]
         include_vendor: bool,
+        #[arg(long, default_value_t = 100_000)]
+        max_files: usize,
+        #[arg(long, default_value_t = 2 * 1024 * 1024)]
+        max_file_size: u64,
     },
     Languages,
     Frameworks,
@@ -68,9 +72,18 @@ fn run() -> Result<()> {
             output,
             fail_on,
             include_vendor,
+            max_files,
+            max_file_size,
         } => {
             let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], built_in_rules());
-            let result = engine.scan(&path, include_vendor)?;
+            let result = engine.scan_with_options(
+                &path,
+                ScanOptions {
+                    include_vendor,
+                    max_files,
+                    max_file_size,
+                },
+            )?;
             let output_format = match format {
                 FormatArg::Terminal => OutputFormat::Terminal,
                 FormatArg::Json => OutputFormat::Json,

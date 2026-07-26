@@ -1,7 +1,6 @@
 use fermio_core::{Confidence, Finding, Severity};
 use fermio_ir::{Instruction, ModuleIr};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use sha2::{Digest, Sha256};
 
 pub trait Rule: Send + Sync {
     fn id(&self) -> &'static str;
@@ -89,7 +88,7 @@ impl Rule for DangerousFunctionRule {
                     severity: self.severity,
                     confidence: Confidence::High,
                     location: location.clone(),
-                    fingerprint: fingerprint(self.id, location),
+                    fingerprint: fingerprint(self.id, target, location),
                     cwe: Some(self.cwe.to_string()),
                     framework: None,
                 }),
@@ -103,10 +102,44 @@ fn normalize_call(target: &str) -> &str {
     target.trim_start_matches('\\')
 }
 
-fn fingerprint(rule_id: &str, location: &fermio_core::SourceLocation) -> String {
-    let mut hasher = DefaultHasher::new();
-    rule_id.hash(&mut hasher);
-    location.path.hash(&mut hasher);
-    location.start_line.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+fn fingerprint(
+    rule_id: &str,
+    semantic_anchor: &str,
+    location: &fermio_core::SourceLocation,
+) -> String {
+    let normalized_path = location.path.to_string_lossy().replace('\\', "/");
+    let mut hasher = Sha256::new();
+    hasher.update(rule_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(normalized_path.as_bytes());
+    hasher.update([0]);
+    hasher.update(normalize_call(semantic_anchor).as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fermio_core::SourceLocation;
+
+    #[test]
+    fn fingerprint_does_not_change_when_line_moves() {
+        let first = SourceLocation {
+            path: "src/example.php".into(),
+            start_line: 10,
+            start_column: 1,
+            end_line: 10,
+            end_column: 12,
+        };
+        let moved = SourceLocation {
+            start_line: 40,
+            end_line: 40,
+            ..first.clone()
+        };
+
+        assert_eq!(
+            fingerprint("RULE-001", "system", &first),
+            fingerprint("RULE-001", "system", &moved)
+        );
+    }
 }
