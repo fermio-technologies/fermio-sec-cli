@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use fermio_core::SourceLocation;
+use fermio_core::{Diagnostic, DiagnosticSeverity, SourceLocation};
 use fermio_ir::{Instruction, ModuleIr};
-use fermio_language_api::{LanguageFrontend, ProjectDetection, SourceFile};
+use fermio_language_api::{FrontendOutput, LanguageFrontend, ProjectDetection, SourceFile};
 use serde_json::Value;
 use std::{fs, path::Path};
 use tree_sitter::{Node, Parser};
@@ -73,7 +73,7 @@ impl LanguageFrontend for PhpFrontend {
         })
     }
 
-    fn parse_and_lower(&self, file: &SourceFile) -> Result<ModuleIr> {
+    fn parse_and_lower(&self, file: &SourceFile) -> Result<FrontendOutput> {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
@@ -84,17 +84,22 @@ impl LanguageFrontend for PhpFrontend {
             .context("Tree-sitter did not return a PHP syntax tree")?;
 
         let mut instructions = Vec::new();
+        let mut diagnostics = Vec::new();
         collect_calls(
             tree.root_node(),
             file.content.as_bytes(),
             &file.path,
             &mut instructions,
         );
+        collect_syntax_diagnostics(tree.root_node(), &file.path, &mut diagnostics);
 
-        Ok(ModuleIr {
-            language: "php".to_string(),
-            path: file.path.to_string_lossy().into_owned(),
-            instructions,
+        Ok(FrontendOutput {
+            module: ModuleIr {
+                language: "php".to_string(),
+                path: file.path.to_string_lossy().into_owned(),
+                instructions,
+            },
+            diagnostics,
         })
     }
 }
@@ -105,18 +110,10 @@ fn collect_calls(node: Node<'_>, source: &[u8], path: &Path, output: &mut Vec<In
         "function_call_expression" | "member_call_expression" | "scoped_call_expression"
     ) {
         if let Some(name) = call_name(node, source) {
-            let start = node.start_position();
-            let end = node.end_position();
             output.push(Instruction::Call {
                 target: name,
                 arguments: Vec::new(),
-                location: SourceLocation {
-                    path: path.to_path_buf(),
-                    start_line: start.row + 1,
-                    start_column: start.column + 1,
-                    end_line: end.row + 1,
-                    end_column: end.column + 1,
-                },
+                location: source_location(node, path),
             });
         }
     }
@@ -124,6 +121,42 @@ fn collect_calls(node: Node<'_>, source: &[u8], path: &Path, output: &mut Vec<In
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect_calls(child, source, path, output);
+    }
+}
+
+fn collect_syntax_diagnostics(
+    node: Node<'_>,
+    path: &Path,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if node.is_error() || node.is_missing() {
+        diagnostics.push(Diagnostic {
+            code: "PHP-PARSE-001".to_string(),
+            message: if node.is_missing() {
+                format!("Missing PHP syntax element: {}", node.kind())
+            } else {
+                "Unexpected or incomplete PHP syntax".to_string()
+            },
+            severity: DiagnosticSeverity::Error,
+            location: Some(source_location(node, path)),
+        });
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_syntax_diagnostics(child, path, diagnostics);
+    }
+}
+
+fn source_location(node: Node<'_>, path: &Path) -> SourceLocation {
+    let start = node.start_position();
+    let end = node.end_position();
+    SourceLocation {
+        path: path.to_path_buf(),
+        start_line: start.row + 1,
+        start_column: start.column + 1,
+        end_line: end.row + 1,
+        end_column: end.column + 1,
     }
 }
 
@@ -136,4 +169,23 @@ fn call_name(node: Node<'_>, source: &[u8]) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_invalid_php_as_diagnostic() {
+        let frontend = PhpFrontend::new();
+        let output = frontend
+            .parse_and_lower(&SourceFile {
+                path: "invalid.php".into(),
+                content: "<?php function broken( {".to_string(),
+            })
+            .expect("frontend should return a partial result");
+
+        assert!(!output.diagnostics.is_empty());
+        assert_eq!(output.diagnostics[0].code, "PHP-PARSE-001");
+    }
 }
