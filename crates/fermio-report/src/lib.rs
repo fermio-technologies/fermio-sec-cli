@@ -22,7 +22,11 @@ pub fn write_report(
             writeln!(writer, "Fermio Security scan")?;
             writeln!(writer, "Root: {}", result.project.root.display())?;
             writeln!(writer, "Languages: {}", result.project.languages.join(", "))?;
-            writeln!(writer, "Frameworks: {}", display_frameworks(&result.project.frameworks))?;
+            writeln!(
+                writer,
+                "Frameworks: {}",
+                display_frameworks(&result.project.frameworks)
+            )?;
             writeln!(writer, "Files parsed: {}", result.statistics.files_parsed)?;
             writeln!(writer, "Findings: {}\n", result.statistics.findings)?;
 
