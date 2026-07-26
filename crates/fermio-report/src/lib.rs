@@ -27,8 +27,28 @@ pub fn write_report(
                 "Frameworks: {}",
                 display_frameworks(&result.project.frameworks)
             )?;
+            writeln!(writer, "Files discovered: {}", result.statistics.files_discovered)?;
             writeln!(writer, "Files parsed: {}", result.statistics.files_parsed)?;
+            writeln!(writer, "Files skipped: {}", result.statistics.files_skipped)?;
+            writeln!(writer, "Diagnostics: {}", result.statistics.diagnostics)?;
             writeln!(writer, "Findings: {}\n", result.statistics.findings)?;
+
+            for diagnostic in &result.diagnostics {
+                if let Some(location) = &diagnostic.location {
+                    writeln!(
+                        writer,
+                        "{:?} {} {}:{}:{}",
+                        diagnostic.severity,
+                        diagnostic.code,
+                        location.path.display(),
+                        location.start_line,
+                        location.start_column,
+                    )?;
+                } else {
+                    writeln!(writer, "{:?} {}", diagnostic.severity, diagnostic.code)?;
+                }
+                writeln!(writer, "  {}\n", diagnostic.message)?;
+            }
 
             for finding in &result.findings {
                 writeln!(
