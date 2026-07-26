@@ -7,4 +7,5 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+fermio-core = { path = "../fermio-core" }
 fermio-ir = { path = "../fermio-ir" }
