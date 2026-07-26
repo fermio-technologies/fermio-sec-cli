@@ -175,9 +175,10 @@ impl<'a> PhpLowerer<'a> {
                 });
                 output
             }
-            "string" | "encapsed_string" | "heredoc" | "nowdoc" => {
-                self.lower_literal(node, LiteralValue::String(node_text(node, self.source).unwrap_or_default()))
-            }
+            "string" | "encapsed_string" | "heredoc" | "nowdoc" => self.lower_literal(
+                node,
+                LiteralValue::String(node_text(node, self.source).unwrap_or_default()),
+            ),
             "integer" => self.lower_literal(
                 node,
                 LiteralValue::Integer(node_text(node, self.source).unwrap_or_default()),
@@ -339,7 +340,9 @@ fn last_named_child(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn node_text(node: Node<'_>, source: &[u8]) -> Option<String> {
-    node.utf8_text(source).ok().map(|text| text.trim().to_string())
+    node.utf8_text(source)
+        .ok()
+        .map(|text| text.trim().to_string())
 }
 
 fn collect_syntax_diagnostics(node: Node<'_>, path: &Path, diagnostics: &mut Vec<Diagnostic>) {
