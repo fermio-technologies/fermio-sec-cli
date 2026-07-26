@@ -57,7 +57,13 @@ impl DangerousFunctionRule {
         severity: Severity,
         cwe: &'static str,
     ) -> Self {
-        Self { id, title, function, severity, cwe }
+        Self {
+            id,
+            title,
+            function,
+            severity,
+            cwe,
+        }
     }
 }
 
@@ -71,24 +77,22 @@ impl Rule for DangerousFunctionRule {
             .instructions
             .iter()
             .filter_map(|instruction| match instruction {
-                Instruction::Call { target, location, .. }
-                    if normalize_call(target) == self.function =>
-                {
-                    Some(Finding {
-                        rule_id: self.id.to_string(),
-                        title: self.title.to_string(),
-                        description: format!(
-                            "The PHP function `{}` requires security review.",
-                            self.function
-                        ),
-                        severity: self.severity,
-                        confidence: Confidence::High,
-                        location: location.clone(),
-                        fingerprint: fingerprint(self.id, location),
-                        cwe: Some(self.cwe.to_string()),
-                        framework: None,
-                    })
-                }
+                Instruction::Call {
+                    target, location, ..
+                } if normalize_call(target) == self.function => Some(Finding {
+                    rule_id: self.id.to_string(),
+                    title: self.title.to_string(),
+                    description: format!(
+                        "The PHP function `{}` requires security review.",
+                        self.function
+                    ),
+                    severity: self.severity,
+                    confidence: Confidence::High,
+                    location: location.clone(),
+                    fingerprint: fingerprint(self.id, location),
+                    cwe: Some(self.cwe.to_string()),
+                    framework: None,
+                }),
                 _ => None,
             })
             .collect()
