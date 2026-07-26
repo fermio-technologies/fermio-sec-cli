@@ -8,3 +8,4 @@ rust-version.workspace = true
 [dependencies]
 fermio-core = { path = "../fermio-core" }
 fermio-ir = { path = "../fermio-ir" }
+sha2.workspace = true
