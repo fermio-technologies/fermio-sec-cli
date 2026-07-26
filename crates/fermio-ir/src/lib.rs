@@ -13,21 +13,67 @@ pub struct ModuleIr {
     pub instructions: Vec<Instruction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ValueId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum LiteralValue {
+    String(String),
+    Integer(String),
+    Float(String),
+    Boolean(bool),
+    Null,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallKind {
+    Function,
+    Method,
+    NullsafeMethod,
+    StaticMethod,
+    Dynamic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
-    Call {
-        target: String,
-        arguments: Vec<String>,
+    VariableRead {
+        output: ValueId,
+        name: String,
+        location: SourceLocation,
+    },
+    Literal {
+        output: ValueId,
+        value: LiteralValue,
         location: SourceLocation,
     },
     Assignment {
         target: String,
-        value: String,
+        value: ValueId,
         location: SourceLocation,
     },
-    Literal {
-        value: String,
+    Concatenate {
+        output: ValueId,
+        operands: Vec<ValueId>,
+        location: SourceLocation,
+    },
+    Call {
+        output: ValueId,
+        target: String,
+        call_kind: CallKind,
+        arguments: Vec<ValueId>,
+        location: SourceLocation,
+    },
+    Return {
+        value: Option<ValueId>,
+        location: SourceLocation,
+    },
+    Opaque {
+        output: ValueId,
+        expression: String,
         location: SourceLocation,
     },
 }
