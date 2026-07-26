@@ -1,0 +1,10 @@
+[package]
+name = "fermio-rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fermio-core = { path = "../fermio-core" }
+fermio-ir = { path = "../fermio-ir" }
