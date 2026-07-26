@@ -10,9 +10,12 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Composer project discovery
 - Laravel, Symfony and WordPress detection
 - PHP parsing through Tree-sitter
+- Structured syntax diagnostics
 - Deterministic rule execution
 - Terminal and JSON reports
-- Stable finding fingerprints
+- Stable SHA-256 finding fingerprints
+- `.gitignore` and `.fermioignore` support
+- File-count and file-size scan limits
 - Local-only scans by default
 
 ## Commands
@@ -20,8 +23,19 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 ```bash
 cargo run -p fermio-cli -- scan .
 cargo run -p fermio-cli -- scan . --format json
+cargo run -p fermio-cli -- scan . --max-files 50000 --max-file-size 2097152
 cargo run -p fermio-cli -- languages
 cargo run -p fermio-cli -- frameworks
 ```
+
+Create a `.fermioignore` file in the project root to exclude generated or application-specific paths:
+
+```gitignore
+storage/**
+cache/**
+generated/**
+```
+
+Default scan limits are 100,000 PHP files and 2 MiB per file. Oversized files are skipped with a diagnostic; exceeding the total file-count limit stops the scan.
 
 See [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) for the first-version design.
