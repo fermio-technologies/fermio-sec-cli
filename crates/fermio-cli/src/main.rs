@@ -5,7 +5,12 @@ use fermio_engine::{ScanEngine, ScanOptions};
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
 use fermio_rules::built_in_rules;
-use std::{fs, fs::File, io, path::PathBuf};
+use std::{
+    fs,
+    fs::File,
+    io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -141,7 +146,7 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn read_baseline_file(path: &PathBuf) -> Result<FindingBaseline> {
+fn read_baseline_file(path: &Path) -> Result<FindingBaseline> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("failed to read baseline {}", path.display()))?;
     let baseline: FindingBaseline = serde_json::from_str(&content)
@@ -157,7 +162,7 @@ fn read_baseline_file(path: &PathBuf) -> Result<FindingBaseline> {
     Ok(baseline)
 }
 
-fn write_baseline_file(path: &PathBuf, baseline: &FindingBaseline) -> Result<()> {
+fn write_baseline_file(path: &Path, baseline: &FindingBaseline) -> Result<()> {
     let file = File::create(path)
         .with_context(|| format!("failed to create baseline {}", path.display()))?;
     serde_json::to_writer_pretty(file, baseline)
