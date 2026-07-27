@@ -1,11 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use fermio_core::Severity;
+use fermio_core::{FindingBaseline, Severity};
 use fermio_engine::{ScanEngine, ScanOptions};
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
 use fermio_rules::built_in_rules;
-use std::{fs::File, io, path::PathBuf};
+use std::{fs, fs::File, io, path::PathBuf};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -35,6 +35,10 @@ enum Command {
         max_files: usize,
         #[arg(long, default_value_t = 2 * 1024 * 1024)]
         max_file_size: u64,
+        #[arg(long, value_name = "FILE", conflicts_with = "write_baseline")]
+        baseline: Option<PathBuf>,
+        #[arg(long, value_name = "FILE", conflicts_with = "baseline")]
+        write_baseline: Option<PathBuf>,
     },
     Languages,
     Frameworks,
@@ -45,6 +49,7 @@ enum Command {
 enum FormatArg {
     Terminal,
     Json,
+    Sarif,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -74,9 +79,11 @@ fn run() -> Result<()> {
             include_vendor,
             max_files,
             max_file_size,
+            baseline,
+            write_baseline,
         } => {
             let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], built_in_rules());
-            let result = engine.scan_with_options(
+            let mut result = engine.scan_with_options(
                 &path,
                 ScanOptions {
                     include_vendor,
@@ -84,9 +91,20 @@ fn run() -> Result<()> {
                     max_file_size,
                 },
             )?;
+
+            if let Some(path) = write_baseline {
+                write_baseline_file(&path, &FindingBaseline::from_result(&result))?;
+            }
+
+            if let Some(path) = baseline {
+                let baseline = read_baseline_file(&path)?;
+                baseline.apply(&mut result);
+            }
+
             let output_format = match format {
                 FormatArg::Terminal => OutputFormat::Terminal,
                 FormatArg::Json => OutputFormat::Json,
+                FormatArg::Sarif => OutputFormat::Sarif,
             };
 
             if let Some(path) = output {
@@ -120,6 +138,30 @@ fn run() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn read_baseline_file(path: &PathBuf) -> Result<FindingBaseline> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read baseline {}", path.display()))?;
+    let baseline: FindingBaseline = serde_json::from_str(&content)
+        .with_context(|| format!("invalid baseline JSON in {}", path.display()))?;
+    if baseline.schema_version != FindingBaseline::SCHEMA_VERSION {
+        bail!(
+            "unsupported baseline schema version {} in {}; expected {}",
+            baseline.schema_version,
+            path.display(),
+            FindingBaseline::SCHEMA_VERSION
+        );
+    }
+    Ok(baseline)
+}
+
+fn write_baseline_file(path: &PathBuf, baseline: &FindingBaseline) -> Result<()> {
+    let file = File::create(path)
+        .with_context(|| format!("failed to create baseline {}", path.display()))?;
+    serde_json::to_writer_pretty(file, baseline)
+        .with_context(|| format!("failed to write baseline {}", path.display()))?;
     Ok(())
 }
 
