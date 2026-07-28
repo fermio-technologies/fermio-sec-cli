@@ -60,6 +60,12 @@ pub enum Instruction {
         operands: Vec<ValueId>,
         location: SourceLocation,
     },
+    IndexRead {
+        output: ValueId,
+        collection: ValueId,
+        index: Option<ValueId>,
+        location: SourceLocation,
+    },
     Call {
         output: ValueId,
         target: String,

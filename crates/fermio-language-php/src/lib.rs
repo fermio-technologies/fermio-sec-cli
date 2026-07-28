@@ -201,6 +201,7 @@ impl<'a> PhpLowerer<'a> {
             "binary_expression" if operator_text(node, self.source).as_deref() == Some(".") => {
                 self.lower_concatenation(node)
             }
+            "subscript_expression" => self.lower_index_read(node),
             "function_call_expression"
             | "member_call_expression"
             | "nullsafe_member_call_expression"
@@ -235,6 +236,24 @@ impl<'a> PhpLowerer<'a> {
         self.instructions.push(Instruction::Concatenate {
             output,
             operands,
+            location: source_location(node, self.path),
+        });
+        output
+    }
+
+    fn lower_index_read(&mut self, node: Node<'_>) -> ValueId {
+        let collection = node
+            .named_child(0)
+            .map(|child| self.lower_expression(child))
+            .unwrap_or_else(|| self.lower_opaque(node));
+        let index = node
+            .named_child(1)
+            .map(|child| self.lower_expression(child));
+        let output = self.next_value();
+        self.instructions.push(Instruction::IndexRead {
+            output,
+            collection,
+            index,
             location: source_location(node, self.path),
         });
         output
@@ -413,6 +432,18 @@ mod tests {
             .any(|instruction| matches!(instruction, Instruction::Concatenate { operands, .. } if operands.len() == 2)));
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(instruction, Instruction::Call { target, arguments, .. } if target == "system" && arguments.len() == 1)
+        }));
+    }
+
+    #[test]
+    fn lowers_superglobal_index_reads() {
+        let output = lower("<?php system($_GET['cmd']);");
+
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::VariableRead { name, .. } if name == "$_GET")
+        }));
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::IndexRead { index: Some(_), .. })
         }));
     }
 

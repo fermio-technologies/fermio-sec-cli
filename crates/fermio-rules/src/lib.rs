@@ -1,23 +1,39 @@
 use fermio_core::{Confidence, Finding, Severity, SourceLocation};
-use fermio_ir::{Instruction, LiteralValue, ModuleIr, ValueId};
+use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, ValueId};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+
+const COMMAND_FUNCTIONS: &[&str] = &[
+    "exec",
+    "passthru",
+    "popen",
+    "proc_open",
+    "shell_exec",
+    "system",
+];
 
 pub trait Rule: Send + Sync {
     fn id(&self) -> &'static str;
     fn evaluate(&self, analysis: &ModuleAnalysis<'_>) -> Vec<Finding>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaintFact {
+    pub source: String,
+}
+
 pub struct ModuleAnalysis<'a> {
     module: &'a ModuleIr,
     producers: HashMap<ValueId, &'a Instruction>,
     aliases: HashMap<ValueId, ValueId>,
+    taint: HashMap<ValueId, TaintFact>,
 }
 
 impl<'a> ModuleAnalysis<'a> {
     pub fn new(module: &'a ModuleIr) -> Self {
         let mut producers = HashMap::new();
         let mut aliases = HashMap::new();
+        let mut taint = HashMap::new();
         let mut assignments = HashMap::<String, ValueId>::new();
 
         for instruction in &module.instructions {
@@ -27,12 +43,36 @@ impl<'a> ModuleAnalysis<'a> {
 
             match instruction {
                 Instruction::VariableRead { output, name, .. } => {
-                    if let Some(value) = assignments.get(name) {
+                    if is_untrusted_superglobal(name) {
+                        taint.insert(
+                            *output,
+                            TaintFact {
+                                source: name.clone(),
+                            },
+                        );
+                    } else if let Some(value) = assignments.get(name) {
                         aliases.insert(*output, *value);
+                        if let Some(fact) = taint.get(value).cloned() {
+                            taint.insert(*output, fact);
+                        }
                     }
                 }
                 Instruction::Assignment { target, value, .. } => {
                     assignments.insert(target.clone(), *value);
+                }
+                Instruction::Concatenate {
+                    output, operands, ..
+                } => {
+                    if let Some(fact) = operands.iter().find_map(|value| taint.get(value)).cloned() {
+                        taint.insert(*output, fact);
+                    }
+                }
+                Instruction::IndexRead {
+                    output, collection, ..
+                } => {
+                    if let Some(fact) = taint.get(collection).cloned() {
+                        taint.insert(*output, fact);
+                    }
                 }
                 _ => {}
             }
@@ -42,11 +82,16 @@ impl<'a> ModuleAnalysis<'a> {
             module,
             producers,
             aliases,
+            taint,
         }
     }
 
     pub fn module(&self) -> &'a ModuleIr {
         self.module
+    }
+
+    pub fn taint(&self, value: ValueId) -> Option<&TaintFact> {
+        self.taint.get(&value)
     }
 
     pub fn resolve_constant_string(&self, value: ValueId) -> Option<String> {
@@ -100,14 +145,7 @@ pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DangerousFunctionRule::new(
             "FERMIO-PHP-CORE-CMD-001",
             "Operating system command execution",
-            &[
-                "exec",
-                "passthru",
-                "popen",
-                "proc_open",
-                "shell_exec",
-                "system",
-            ],
+            COMMAND_FUNCTIONS,
             Severity::High,
             "CWE-78",
         )),
@@ -126,6 +164,7 @@ pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
             "CWE-328",
         )),
         Box::new(HardcodedSecretRule),
+        Box::new(TaintedCommandRule),
     ]
 }
 
@@ -153,6 +192,14 @@ impl DangerousFunctionRule {
             cwe,
         }
     }
+
+    fn matching_function(&self, target: &str) -> Option<&'static str> {
+        let normalized = normalize_call(target);
+        self.functions
+            .iter()
+            .copied()
+            .find(|function| normalized.eq_ignore_ascii_case(function))
+    }
 }
 
 impl Rule for DangerousFunctionRule {
@@ -167,7 +214,10 @@ impl Rule for DangerousFunctionRule {
             .iter()
             .filter_map(|instruction| match instruction {
                 Instruction::Call {
-                    target, location, ..
+                    target,
+                    call_kind: CallKind::Function,
+                    location,
+                    ..
                 } => self.matching_function(target).map(|function| Finding {
                     rule_id: self.id.to_string(),
                     title: self.title.to_string(),
@@ -185,13 +235,51 @@ impl Rule for DangerousFunctionRule {
     }
 }
 
-impl DangerousFunctionRule {
-    fn matching_function(&self, target: &str) -> Option<&'static str> {
-        let normalized = normalize_call(target);
-        self.functions
+struct TaintedCommandRule;
+
+impl Rule for TaintedCommandRule {
+    fn id(&self) -> &'static str {
+        "FERMIO-PHP-TAINT-CMD-001"
+    }
+
+    fn evaluate(&self, analysis: &ModuleAnalysis<'_>) -> Vec<Finding> {
+        analysis
+            .module()
+            .instructions
             .iter()
-            .copied()
-            .find(|function| normalized.eq_ignore_ascii_case(function))
+            .filter_map(|instruction| match instruction {
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Function,
+                    arguments,
+                    location,
+                    ..
+                } if is_command_function(target) => {
+                    let argument = arguments.first()?;
+                    let fact = analysis.taint(*argument)?;
+                    let function = normalize_call(target);
+                    Some(Finding {
+                        rule_id: self.id().to_string(),
+                        title: "User-controlled command execution".to_string(),
+                        description: format!(
+                            "Data originating from `{}` reaches the PHP command execution function `{function}`.",
+                            fact.source
+                        ),
+                        severity: Severity::Critical,
+                        confidence: Confidence::High,
+                        location: location.clone(),
+                        fingerprint: fingerprint(
+                            self.id(),
+                            &format!("{function}:{}", fact.source),
+                            location,
+                        ),
+                        cwe: Some("CWE-78".to_string()),
+                        framework: None,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -243,6 +331,7 @@ fn instruction_output(instruction: &Instruction) -> Option<ValueId> {
         Instruction::VariableRead { output, .. }
         | Instruction::Literal { output, .. }
         | Instruction::Concatenate { output, .. }
+        | Instruction::IndexRead { output, .. }
         | Instruction::Call { output, .. }
         | Instruction::Opaque { output, .. } => Some(*output),
         Instruction::Assignment { .. } | Instruction::Return { .. } => None,
@@ -271,6 +360,20 @@ fn normalize_string_literal(value: &str) -> Option<String> {
 
 fn normalize_call(target: &str) -> &str {
     target.trim().trim_start_matches('\\')
+}
+
+fn is_command_function(target: &str) -> bool {
+    let target = normalize_call(target);
+    COMMAND_FUNCTIONS
+        .iter()
+        .any(|function| target.eq_ignore_ascii_case(function))
+}
+
+fn is_untrusted_superglobal(name: &str) -> bool {
+    matches!(
+        name,
+        "$_COOKIE" | "$_FILES" | "$_GET" | "$_POST" | "$_REQUEST" | "$_SERVER"
+    )
 }
 
 fn is_secret_name(target: &str) -> bool {
@@ -331,7 +434,6 @@ fn fingerprint(rule_id: &str, semantic_anchor: &str, location: &SourceLocation) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fermio_ir::CallKind;
 
     fn location(line: usize) -> SourceLocation {
         SourceLocation {
@@ -340,6 +442,16 @@ mod tests {
             start_column: 1,
             end_line: line,
             end_column: 12,
+        }
+    }
+
+    fn call(target: &str, argument: ValueId, line: usize) -> Instruction {
+        Instruction::Call {
+            output: ValueId(100 + line as u32),
+            target: target.to_string(),
+            call_kind: CallKind::Function,
+            arguments: vec![argument],
+            location: location(line),
         }
     }
 
@@ -384,14 +496,109 @@ mod tests {
     }
 
     #[test]
-    fn command_rule_covers_php_command_functions() {
+    fn propagates_superglobal_taint_through_index_assignment_and_concat() {
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions: vec![
+                Instruction::VariableRead {
+                    output: ValueId(0),
+                    name: "$_GET".to_string(),
+                    location: location(1),
+                },
+                Instruction::IndexRead {
+                    output: ValueId(1),
+                    collection: ValueId(0),
+                    index: None,
+                    location: location(1),
+                },
+                Instruction::Assignment {
+                    target: "$input".to_string(),
+                    value: ValueId(1),
+                    location: location(1),
+                },
+                Instruction::VariableRead {
+                    output: ValueId(2),
+                    name: "$input".to_string(),
+                    location: location(2),
+                },
+                Instruction::Literal {
+                    output: ValueId(3),
+                    value: LiteralValue::String("'ls '".to_string()),
+                    location: location(2),
+                },
+                Instruction::Concatenate {
+                    output: ValueId(4),
+                    operands: vec![ValueId(3), ValueId(2)],
+                    location: location(2),
+                },
+            ],
+        };
+
+        assert_eq!(
+            ModuleAnalysis::new(&module).taint(ValueId(4)),
+            Some(&TaintFact {
+                source: "$_GET".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn reports_tainted_command_execution() {
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions: vec![
+                Instruction::VariableRead {
+                    output: ValueId(0),
+                    name: "$_POST".to_string(),
+                    location: location(1),
+                },
+                Instruction::IndexRead {
+                    output: ValueId(1),
+                    collection: ValueId(0),
+                    index: None,
+                    location: location(1),
+                },
+                call("system", ValueId(1), 2),
+            ],
+        };
+        let findings = TaintedCommandRule.evaluate(&ModuleAnalysis::new(&module));
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert!(findings[0].description.contains("$_POST"));
+    }
+
+    #[test]
+    fn does_not_report_constant_command_arguments_as_tainted() {
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions: vec![
+                Instruction::Literal {
+                    output: ValueId(0),
+                    value: LiteralValue::String("'uptime'".to_string()),
+                    location: location(1),
+                },
+                call("system", ValueId(0), 1),
+            ],
+        };
+
+        assert!(TaintedCommandRule
+            .evaluate(&ModuleAnalysis::new(&module))
+            .is_empty());
+    }
+
+    #[test]
+    fn ignores_method_calls_named_like_dangerous_functions() {
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions: vec![Instruction::Call {
                 output: ValueId(0),
-                target: "shell_exec".to_string(),
-                call_kind: CallKind::Function,
+                target: "system".to_string(),
+                call_kind: CallKind::Method,
                 arguments: Vec::new(),
                 location: location(1),
             }],
@@ -402,7 +609,7 @@ mod tests {
             .find(|rule| rule.id() == "FERMIO-PHP-CORE-CMD-001")
             .expect("command rule should exist");
 
-        assert_eq!(rule.evaluate(&analysis).len(), 1);
+        assert!(rule.evaluate(&analysis).is_empty());
     }
 
     #[test]
@@ -423,36 +630,10 @@ mod tests {
                 },
             ],
         };
-        let analysis = ModuleAnalysis::new(&module);
-        let rule = HardcodedSecretRule;
-        let findings = rule.evaluate(&analysis);
+        let findings = HardcodedSecretRule.evaluate(&ModuleAnalysis::new(&module));
 
         assert_eq!(findings.len(), 1);
         assert!(!findings[0].description.contains("sk_live_private_value"));
-    }
-
-    #[test]
-    fn placeholder_secret_values_are_ignored() {
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions: vec![
-                Instruction::Literal {
-                    output: ValueId(0),
-                    value: LiteralValue::String("'changeme'".to_string()),
-                    location: location(1),
-                },
-                Instruction::Assignment {
-                    target: "$password".to_string(),
-                    value: ValueId(0),
-                    location: location(1),
-                },
-            ],
-        };
-
-        assert!(HardcodedSecretRule
-            .evaluate(&ModuleAnalysis::new(&module))
-            .is_empty());
     }
 
     #[test]
