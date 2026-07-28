@@ -100,7 +100,14 @@ pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
         Box::new(DangerousFunctionRule::new(
             "FERMIO-PHP-CORE-CMD-001",
             "Operating system command execution",
-            &["exec", "passthru", "popen", "proc_open", "shell_exec", "system"],
+            &[
+                "exec",
+                "passthru",
+                "popen",
+                "proc_open",
+                "shell_exec",
+                "system",
+            ],
             Severity::High,
             "CWE-78",
         )),
@@ -164,9 +171,7 @@ impl Rule for DangerousFunctionRule {
                 } => self.matching_function(target).map(|function| Finding {
                     rule_id: self.id.to_string(),
                     title: self.title.to_string(),
-                    description: format!(
-                        "The PHP function `{function}` requires security review."
-                    ),
+                    description: format!("The PHP function `{function}` requires security review."),
                     severity: self.severity,
                     confidence: Confidence::High,
                     location: location.clone(),
