@@ -15,6 +15,8 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Terminal, JSON and SARIF 2.1.0 reports
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
+- Intraprocedural PHP command taint analysis
+- SARIF code-flow traces for taint findings
 - `.gitignore` and `.fermioignore` support
 - File-count and file-size scan limits
 - Local-only scans by default
@@ -30,6 +32,14 @@ cargo run -p fermio-cli -- languages
 cargo run -p fermio-cli -- frameworks
 cargo run -p fermio-cli -- rules
 ```
+
+## Command taint analysis
+
+The initial source-to-sink analysis follows PHP superglobal input through indexed reads, assignments, variable reads and string concatenation into command execution functions such as `system`, `exec` and `shell_exec`.
+
+The functions `escapeshellarg()` and `escapeshellcmd()` are recognized as command sanitizers. A sanitized value does not produce `FERMIO-PHP-TAINT-CMD-001` when passed to a command sink.
+
+SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations and the command sink. The trace does not contain the runtime input value or source snippets.
 
 ## Baseline workflow
 
