@@ -38,6 +38,12 @@ pub struct SourceLocation {
     pub end_column: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataflowStep {
+    pub label: String,
+    pub location: SourceLocation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
@@ -57,6 +63,8 @@ pub struct Finding {
     pub fingerprint: String,
     pub cwe: Option<String>,
     pub framework: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dataflow: Vec<DataflowStep>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +156,7 @@ mod tests {
             fingerprint: fingerprint.to_string(),
             cwe: None,
             framework: None,
+            dataflow: Vec::new(),
         }
     }
 
