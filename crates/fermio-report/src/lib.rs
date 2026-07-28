@@ -1,5 +1,5 @@
 use anyhow::Result;
-use fermio_core::{Finding, ScanResult, Severity};
+use fermio_core::{DataflowStep, Finding, ScanResult, Severity, SourceLocation};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, io::Write};
 
@@ -33,11 +33,7 @@ pub fn write_report(
                 "Frameworks: {}",
                 display_frameworks(&result.project.frameworks)
             )?;
-            writeln!(
-                writer,
-                "Files discovered: {}",
-                result.statistics.files_discovered
-            )?;
+            writeln!(writer, "Files discovered: {}", result.statistics.files_discovered)?;
             writeln!(writer, "Files parsed: {}", result.statistics.files_parsed)?;
             writeln!(writer, "Files skipped: {}", result.statistics.files_skipped)?;
             writeln!(writer, "Diagnostics: {}", result.statistics.diagnostics)?;
@@ -76,7 +72,18 @@ pub fn write_report(
                     finding.location.start_column,
                 )?;
                 writeln!(writer, "  {}", finding.title)?;
-                writeln!(writer, "  {}\n", finding.description)?;
+                writeln!(writer, "  {}", finding.description)?;
+                for step in &finding.dataflow {
+                    writeln!(
+                        writer,
+                        "    -> {} at {}:{}:{}",
+                        step.label,
+                        step.location.path.display(),
+                        step.location.start_line,
+                        step.location.start_column
+                    )?;
+                }
+                writeln!(writer)?;
             }
         }
     }
@@ -141,7 +148,7 @@ fn sarif_report(result: &ScanResult) -> Value {
 }
 
 fn sarif_result(finding: &Finding, rule_index: usize) -> Value {
-    json!({
+    let mut result = json!({
         "ruleId": finding.rule_id,
         "ruleIndex": rule_index,
         "level": sarif_level(finding.severity),
@@ -149,23 +156,54 @@ fn sarif_result(finding: &Finding, rule_index: usize) -> Value {
         "partialFingerprints": {
             "fermioFingerprint/v1": finding.fingerprint,
         },
-        "locations": [{
-            "physicalLocation": {
-                "artifactLocation": {
-                    "uri": finding.location.path.to_string_lossy().replace('\\', "/"),
-                    "uriBaseId": "%SRCROOT%",
-                },
-                "region": {
-                    "startLine": finding.location.start_line,
-                    "startColumn": finding.location.start_column,
-                    "endLine": finding.location.end_line,
-                    "endColumn": finding.location.end_column,
-                }
-            }
-        }],
+        "locations": [sarif_location(&finding.location)],
         "properties": {
             "confidence": format!("{:?}", finding.confidence).to_ascii_lowercase(),
             "framework": finding.framework,
+        }
+    });
+
+    if !finding.dataflow.is_empty() {
+        result["codeFlows"] = json!([{
+            "threadFlows": [{
+                "locations": finding
+                    .dataflow
+                    .iter()
+                    .map(sarif_thread_flow_location)
+                    .collect::<Vec<_>>()
+            }]
+        }]);
+    }
+
+    result
+}
+
+fn sarif_thread_flow_location(step: &DataflowStep) -> Value {
+    json!({
+        "location": {
+            "message": { "text": step.label },
+            "physicalLocation": sarif_physical_location(&step.location),
+        }
+    })
+}
+
+fn sarif_location(location: &SourceLocation) -> Value {
+    json!({
+        "physicalLocation": sarif_physical_location(location)
+    })
+}
+
+fn sarif_physical_location(location: &SourceLocation) -> Value {
+    json!({
+        "artifactLocation": {
+            "uri": location.path.to_string_lossy().replace('\\', "/"),
+            "uriBaseId": "%SRCROOT%",
+        },
+        "region": {
+            "startLine": location.start_line,
+            "startColumn": location.start_column,
+            "endLine": location.end_line,
+            "endColumn": location.end_column,
         }
     })
 }
@@ -189,7 +227,17 @@ fn display_frameworks(frameworks: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fermio_core::{Confidence, Finding, ProjectMetadata, ScanStatistics, SourceLocation};
+    use fermio_core::{Confidence, ProjectMetadata, ScanStatistics};
+
+    fn location(line: usize) -> SourceLocation {
+        SourceLocation {
+            path: "src/example.php".into(),
+            start_line: line,
+            start_column: 1,
+            end_line: line,
+            end_column: 15,
+        }
+    }
 
     fn result() -> ScanResult {
         ScanResult {
@@ -204,33 +252,42 @@ mod tests {
             },
             diagnostics: Vec::new(),
             findings: vec![Finding {
-                rule_id: "FERMIO-PHP-CORE-CMD-001".to_string(),
-                title: "Operating system command execution".to_string(),
-                description: "The PHP function `system` requires security review.".to_string(),
-                severity: Severity::High,
+                rule_id: "FERMIO-PHP-TAINT-CMD-001".to_string(),
+                title: "User-controlled command execution".to_string(),
+                description: "Untrusted data reaches system.".to_string(),
+                severity: Severity::Critical,
                 confidence: Confidence::High,
-                location: SourceLocation {
-                    path: "src/example.php".into(),
-                    start_line: 2,
-                    start_column: 1,
-                    end_line: 2,
-                    end_column: 15,
-                },
+                location: location(3),
                 fingerprint: "abc123".to_string(),
                 cwe: Some("CWE-78".to_string()),
                 framework: None,
+                dataflow: vec![
+                    DataflowStep {
+                        label: "Untrusted input from `$_GET`".to_string(),
+                        location: location(1),
+                    },
+                    DataflowStep {
+                        label: "Command execution sink `system`".to_string(),
+                        location: location(3),
+                    },
+                ],
             }],
         }
     }
 
     #[test]
-    fn writes_sarif_2_1_0_with_fingerprint() {
+    fn writes_sarif_with_fingerprint_and_code_flow() {
         let report = sarif_report(&result());
+        let result = &report["runs"][0]["results"][0];
         assert_eq!(report["version"], "2.1.0");
         assert_eq!(
-            report["runs"][0]["results"][0]["partialFingerprints"]["fermioFingerprint/v1"],
+            result["partialFingerprints"]["fermioFingerprint/v1"],
             "abc123"
         );
-        assert_eq!(report["runs"][0]["results"][0]["ruleIndex"], 0);
+        assert_eq!(result["ruleIndex"], 0);
+        assert_eq!(
+            result["codeFlows"][0]["threadFlows"][0]["locations"].as_array().map(Vec::len),
+            Some(2)
+        );
     }
 }
