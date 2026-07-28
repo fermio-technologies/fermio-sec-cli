@@ -18,3 +18,4 @@ fermio-language-api = { path = "../fermio-language-api" }
 fermio-language-php = { path = "../fermio-language-php" }
 fermio-report = { path = "../fermio-report" }
 fermio-rules = { path = "../fermio-rules" }
+serde_json.workspace = true
