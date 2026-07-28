@@ -228,8 +228,7 @@ mod tests {
         let report = sarif_report(&result());
         assert_eq!(report["version"], "2.1.0");
         assert_eq!(
-            report["runs"][0]["results"][0]["partialFingerprints"]
-                ["fermioFingerprint/v1"],
+            report["runs"][0]["results"][0]["partialFingerprints"]["fermioFingerprint/v1"],
             "abc123"
         );
         assert_eq!(report["runs"][0]["results"][0]["ruleIndex"], 0);
