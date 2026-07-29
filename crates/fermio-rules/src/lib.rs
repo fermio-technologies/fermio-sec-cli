@@ -18,13 +18,31 @@ pub trait Rule: Send + Sync {
     fn evaluate(&self, analysis: &ModuleAnalysis<'_>) -> Vec<Finding>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TaintDomain {
+    Command,
+    Sql,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaintFact {
     pub source: String,
     pub steps: Vec<DataflowStep>,
+    sanitized_for: HashSet<TaintDomain>,
 }
 
 impl TaintFact {
+    fn source(source: String, location: &SourceLocation) -> Self {
+        Self {
+            steps: vec![DataflowStep {
+                label: format!("Untrusted input from `{source}`"),
+                location: location.clone(),
+            }],
+            source,
+            sanitized_for: HashSet::new(),
+        }
+    }
+
     fn propagated(&self, label: impl Into<String>, location: &SourceLocation) -> Self {
         let mut fact = self.clone();
         fact.steps.push(DataflowStep {
@@ -32,6 +50,35 @@ impl TaintFact {
             location: location.clone(),
         });
         fact
+    }
+
+    fn sanitized(
+        &self,
+        domain: TaintDomain,
+        label: impl Into<String>,
+        location: &SourceLocation,
+    ) -> Self {
+        let mut fact = self.propagated(label, location);
+        fact.sanitized_for.insert(domain);
+        fact
+    }
+
+    fn is_active_for(&self, domain: TaintDomain) -> bool {
+        !self.sanitized_for.contains(&domain)
+    }
+
+    fn merge_for_concatenation<'a>(
+        facts: impl IntoIterator<Item = &'a TaintFact>,
+        location: &SourceLocation,
+    ) -> Option<Self> {
+        let mut facts = facts.into_iter();
+        let mut merged = facts.next()?.clone();
+        for fact in facts {
+            merged
+                .sanitized_for
+                .retain(|domain| fact.sanitized_for.contains(domain));
+        }
+        Some(merged.propagated("String concatenation", location))
     }
 }
 
@@ -61,16 +108,7 @@ impl<'a> ModuleAnalysis<'a> {
                     location,
                 } => {
                     if is_untrusted_superglobal(name) {
-                        taint.insert(
-                            *output,
-                            TaintFact {
-                                source: name.clone(),
-                                steps: vec![DataflowStep {
-                                    label: format!("Untrusted input from `{name}`"),
-                                    location: location.clone(),
-                                }],
-                            },
-                        );
+                        taint.insert(*output, TaintFact::source(name.clone(), location));
                     } else if let Some(value) = assignments.get(name) {
                         aliases.insert(*output, *value);
                         if let Some(fact) = taint.get(value) {
@@ -99,8 +137,11 @@ impl<'a> ModuleAnalysis<'a> {
                     operands,
                     location,
                 } => {
-                    if let Some(fact) = operands.iter().find_map(|value| taint.get(value)) {
-                        taint.insert(*output, fact.propagated("String concatenation", location));
+                    if let Some(fact) = TaintFact::merge_for_concatenation(
+                        operands.iter().filter_map(|value| taint.get(value)),
+                        location,
+                    ) {
+                        taint.insert(*output, fact);
                     }
                 }
                 Instruction::IndexRead {
@@ -118,11 +159,36 @@ impl<'a> ModuleAnalysis<'a> {
                     target,
                     call_kind: CallKind::Function,
                     arguments,
-                    ..
-                } if is_command_sanitizer(target) => {
-                    // Sanitizers intentionally terminate command taint propagation.
-                    if arguments.first().is_some_and(|value| taint.contains_key(value)) {
-                        taint.remove(output);
+                    location,
+                } => {
+                    if let Some(argument) = command_sanitizer_argument(target, arguments) {
+                        if let Some(fact) = taint.get(&argument) {
+                            taint.insert(
+                                *output,
+                                fact.sanitized(
+                                    TaintDomain::Command,
+                                    format!(
+                                        "Sanitized for shell command use by `{}`",
+                                        normalize_call(target)
+                                    ),
+                                    location,
+                                ),
+                            );
+                        }
+                    } else if let Some(argument) = sql_sanitizer_argument(target, arguments) {
+                        if let Some(fact) = taint.get(&argument) {
+                            taint.insert(
+                                *output,
+                                fact.sanitized(
+                                    TaintDomain::Sql,
+                                    format!(
+                                        "Sanitized for SQL string use by `{}`",
+                                        normalize_call(target)
+                                    ),
+                                    location,
+                                ),
+                            );
+                        }
                     }
                 }
                 _ => {}
@@ -143,6 +209,10 @@ impl<'a> ModuleAnalysis<'a> {
 
     pub fn taint(&self, value: ValueId) -> Option<&TaintFact> {
         self.taint.get(&value)
+    }
+
+    fn taint_for(&self, value: ValueId, domain: TaintDomain) -> Option<&TaintFact> {
+        self.taint(value).filter(|fact| fact.is_active_for(domain))
     }
 
     pub fn resolve_constant_string(&self, value: ValueId) -> Option<String> {
@@ -219,6 +289,7 @@ pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
         )),
         Box::new(HardcodedSecretRule),
         Box::new(TaintedCommandRule),
+        Box::new(TaintedSqlRule),
     ]
 }
 
@@ -310,8 +381,8 @@ impl Rule for TaintedCommandRule {
                     location,
                     ..
                 } if is_command_function(target) => {
-                    let argument = arguments.first()?;
-                    let fact = analysis.taint(*argument)?;
+                    let argument = *arguments.first()?;
+                    let fact = analysis.taint_for(argument, TaintDomain::Command)?;
                     let function = normalize_call(target);
                     let mut dataflow = fact.steps.clone();
                     dataflow.push(DataflowStep {
@@ -334,6 +405,60 @@ impl Rule for TaintedCommandRule {
                             location,
                         ),
                         cwe: Some("CWE-78".to_string()),
+                        framework: None,
+                        dataflow,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+struct TaintedSqlRule;
+
+impl Rule for TaintedSqlRule {
+    fn id(&self) -> &'static str {
+        "FERMIO-PHP-TAINT-SQL-001"
+    }
+
+    fn evaluate(&self, analysis: &ModuleAnalysis<'_>) -> Vec<Finding> {
+        analysis
+            .module()
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Function,
+                    arguments,
+                    location,
+                    ..
+                } => {
+                    let argument = sql_sink_argument(target, arguments)?;
+                    let fact = analysis.taint_for(argument, TaintDomain::Sql)?;
+                    let function = normalize_call(target);
+                    let mut dataflow = fact.steps.clone();
+                    dataflow.push(DataflowStep {
+                        label: format!("SQL query sink `{function}`"),
+                        location: location.clone(),
+                    });
+                    Some(Finding {
+                        rule_id: self.id().to_string(),
+                        title: "User-controlled SQL query".to_string(),
+                        description: format!(
+                            "Data originating from `{}` reaches the PHP SQL query function `{function}` without a recognized SQL sanitizer or a fixed query boundary.",
+                            fact.source
+                        ),
+                        severity: Severity::Critical,
+                        confidence: Confidence::High,
+                        location: location.clone(),
+                        fingerprint: fingerprint(
+                            self.id(),
+                            &format!("{function}:{}", fact.source),
+                            location,
+                        ),
+                        cwe: Some("CWE-89".to_string()),
                         framework: None,
                         dataflow,
                     })
@@ -427,6 +552,10 @@ fn normalize_call(target: &str) -> &str {
     target.trim().trim_start_matches('\\')
 }
 
+fn normalized_call_name(target: &str) -> String {
+    normalize_call(target).to_ascii_lowercase()
+}
+
 fn is_command_function(target: &str) -> bool {
     let target = normalize_call(target);
     COMMAND_FUNCTIONS
@@ -434,11 +563,43 @@ fn is_command_function(target: &str) -> bool {
         .any(|function| target.eq_ignore_ascii_case(function))
 }
 
-fn is_command_sanitizer(target: &str) -> bool {
+fn command_sanitizer_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
     let target = normalize_call(target);
     COMMAND_SANITIZERS
         .iter()
         .any(|function| target.eq_ignore_ascii_case(function))
+        .then(|| arguments.first().copied())
+        .flatten()
+}
+
+fn sql_sanitizer_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
+    match normalized_call_name(target).as_str() {
+        "mysql_real_escape_string" => arguments.first().copied(),
+        "mysqli_escape_string" | "mysqli_real_escape_string" => arguments.get(1).copied(),
+        "pg_escape_identifier" | "pg_escape_literal" | "pg_escape_string" => {
+            arguments.last().copied()
+        }
+        _ => None,
+    }
+}
+
+fn sql_sink_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
+    match normalized_call_name(target).as_str() {
+        "mysql_query" => arguments.first().copied(),
+        "mysqli_execute_query" | "mysqli_multi_query" | "mysqli_query"
+        | "mysqli_real_query" | "odbc_exec" | "sqlsrv_prepare" | "sqlsrv_query" => {
+            arguments.get(1).copied()
+        }
+        "pg_prepare" | "pg_query" | "pg_send_query" => arguments.last().copied(),
+        "pg_query_params" | "pg_send_query_params" => {
+            if arguments.len() >= 3 {
+                arguments.get(1).copied()
+            } else {
+                arguments.first().copied()
+            }
+        }
+        _ => None,
+    }
 }
 
 fn is_untrusted_superglobal(name: &str) -> bool {
@@ -515,21 +676,21 @@ mod tests {
         }
     }
 
-    fn call(output: u32, target: &str, argument: ValueId, line: usize) -> Instruction {
+    fn call(output: u32, target: &str, arguments: Vec<ValueId>, line: usize) -> Instruction {
         Instruction::Call {
             output: ValueId(output),
             target: target.to_string(),
             call_kind: CallKind::Function,
-            arguments: vec![argument],
+            arguments,
             location: location(line),
         }
     }
 
-    fn tainted_input() -> Vec<Instruction> {
+    fn tainted_input(source: &str) -> Vec<Instruction> {
         vec![
             Instruction::VariableRead {
                 output: ValueId(0),
-                name: "$_GET".to_string(),
+                name: source.to_string(),
                 location: location(1),
             },
             Instruction::IndexRead {
@@ -541,10 +702,18 @@ mod tests {
         ]
     }
 
+    fn literal(output: u32, value: &str, line: usize) -> Instruction {
+        Instruction::Literal {
+            output: ValueId(output),
+            value: LiteralValue::String(value.to_string()),
+            location: location(line),
+        }
+    }
+
     #[test]
     fn reports_tainted_command_with_dataflow() {
-        let mut instructions = tainted_input();
-        instructions.push(call(2, "system", ValueId(1), 2));
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(call(2, "system", vec![ValueId(1)], 2));
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
@@ -557,20 +726,159 @@ mod tests {
     }
 
     #[test]
-    fn command_sanitizers_terminate_taint() {
-        for sanitizer in COMMAND_SANITIZERS {
-            let mut instructions = tainted_input();
-            instructions.push(call(2, sanitizer, ValueId(1), 2));
-            instructions.push(call(3, "system", ValueId(2), 3));
-            let module = ModuleIr {
-                language: "php".to_string(),
-                path: "src/example.php".to_string(),
-                instructions,
-            };
-            assert!(TaintedCommandRule
+    fn command_sanitizer_does_not_hide_sql_taint() {
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 2));
+        instructions.push(call(3, "system", vec![ValueId(2)], 3));
+        instructions.push(call(4, "mysql_query", vec![ValueId(2)], 4));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let analysis = ModuleAnalysis::new(&module);
+        assert!(TaintedCommandRule.evaluate(&analysis).is_empty());
+        assert_eq!(TaintedSqlRule.evaluate(&analysis).len(), 1);
+    }
+
+    #[test]
+    fn reports_mysqli_query_second_argument() {
+        let mut instructions = tainted_input("$_POST");
+        instructions.push(literal(2, "'connection'", 2));
+        instructions.push(call(
+            3,
+            "mysqli_query",
+            vec![ValueId(2), ValueId(1)],
+            3,
+        ));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let findings = TaintedSqlRule.evaluate(&ModuleAnalysis::new(&module));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].cwe.as_deref(), Some("CWE-89"));
+        assert!(findings[0].dataflow.len() >= 3);
+    }
+
+    #[test]
+    fn does_not_treat_mysqli_connection_as_query_text() {
+        let mut instructions = tainted_input("$_POST");
+        instructions.push(literal(2, "'SELECT 1'", 2));
+        instructions.push(call(
+            3,
+            "mysqli_query",
+            vec![ValueId(1), ValueId(2)],
+            3,
+        ));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert!(TaintedSqlRule
+            .evaluate(&ModuleAnalysis::new(&module))
+            .is_empty());
+    }
+
+    #[test]
+    fn sql_sanitizer_does_not_hide_command_taint() {
+        let mut instructions = tainted_input("$_REQUEST");
+        instructions.push(literal(2, "'connection'", 2));
+        instructions.push(call(
+            3,
+            "mysqli_real_escape_string",
+            vec![ValueId(2), ValueId(1)],
+            3,
+        ));
+        instructions.push(call(
+            4,
+            "mysqli_query",
+            vec![ValueId(2), ValueId(3)],
+            4,
+        ));
+        instructions.push(call(5, "system", vec![ValueId(3)], 5));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let analysis = ModuleAnalysis::new(&module);
+        assert!(TaintedSqlRule.evaluate(&analysis).is_empty());
+        assert_eq!(TaintedCommandRule.evaluate(&analysis).len(), 1);
+    }
+
+    #[test]
+    fn pg_query_uses_last_argument_as_query() {
+        let mut instructions = tainted_input("$_COOKIE");
+        instructions.push(literal(2, "'connection'", 2));
+        instructions.push(call(
+            3,
+            "pg_query",
+            vec![ValueId(2), ValueId(1)],
+            3,
+        ));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert_eq!(
+            TaintedSqlRule
                 .evaluate(&ModuleAnalysis::new(&module))
-                .is_empty());
-        }
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn does_not_report_constant_sql_query() {
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions: vec![
+                literal(0, "'SELECT 1'", 1),
+                call(1, "mysql_query", vec![ValueId(0)], 1),
+            ],
+        };
+        assert!(TaintedSqlRule
+            .evaluate(&ModuleAnalysis::new(&module))
+            .is_empty());
+    }
+
+    #[test]
+    fn concatenation_is_sanitized_only_if_all_tainted_operands_are_sanitized() {
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 2));
+        instructions.push(Instruction::VariableRead {
+            output: ValueId(3),
+            name: "$_POST".to_string(),
+            location: location(3),
+        });
+        instructions.push(Instruction::IndexRead {
+            output: ValueId(4),
+            collection: ValueId(3),
+            index: None,
+            location: location(3),
+        });
+        instructions.push(Instruction::Concatenate {
+            output: ValueId(5),
+            operands: vec![ValueId(2), ValueId(4)],
+            location: location(4),
+        });
+        instructions.push(call(6, "system", vec![ValueId(5)], 5));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert_eq!(
+            TaintedCommandRule
+                .evaluate(&ModuleAnalysis::new(&module))
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -579,11 +887,7 @@ mod tests {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions: vec![
-                Instruction::Literal {
-                    output: ValueId(0),
-                    value: LiteralValue::String("'a'".to_string()),
-                    location: location(1),
-                },
+                literal(0, "'a'", 1),
                 Instruction::Concatenate {
                     output: ValueId(1),
                     operands: vec![ValueId(0), ValueId(0)],
