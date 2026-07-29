@@ -12,6 +12,7 @@ const COMMAND_FUNCTIONS: &[&str] = &[
     "system",
 ];
 const COMMAND_SANITIZERS: &[&str] = &["escapeshellarg", "escapeshellcmd"];
+const SUMMARY_SOURCE_PREFIX: &str = "__fermio_parameter_";
 
 pub trait Rule: Send + Sync {
     fn id(&self) -> &'static str;
@@ -43,6 +44,17 @@ impl TaintFact {
         }
     }
 
+    fn parameter(index: usize, name: &str, location: &SourceLocation) -> Self {
+        Self {
+            source: format!("{SUMMARY_SOURCE_PREFIX}{index}"),
+            steps: vec![DataflowStep {
+                label: format!("Function parameter `{name}`"),
+                location: location.clone(),
+            }],
+            sanitized_for: HashSet::new(),
+        }
+    }
+
     fn propagated(&self, label: impl Into<String>, location: &SourceLocation) -> Self {
         let mut fact = self.clone();
         fact.steps.push(DataflowStep {
@@ -67,19 +79,47 @@ impl TaintFact {
         !self.sanitized_for.contains(&domain)
     }
 
-    fn merge_for_concatenation<'a>(
-        facts: impl IntoIterator<Item = &'a TaintFact>,
-        location: &SourceLocation,
-    ) -> Option<Self> {
+    fn merge(facts: Vec<Self>) -> Option<Self> {
         let mut facts = facts.into_iter();
-        let mut merged = facts.next()?.clone();
+        let mut merged = facts.next()?;
         for fact in facts {
             merged
                 .sanitized_for
                 .retain(|domain| fact.sanitized_for.contains(domain));
         }
-        Some(merged.propagated("String concatenation", location))
+        Some(merged)
     }
+
+    fn merge_for_concatenation(facts: Vec<Self>, location: &SourceLocation) -> Option<Self> {
+        Self::merge(facts).map(|fact| fact.propagated("String concatenation", location))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FunctionRegion<'a> {
+    name: String,
+    parameters: Vec<String>,
+    instructions: Vec<&'a Instruction>,
+    location: SourceLocation,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FunctionSummary {
+    dependencies: Vec<ReturnDependency>,
+    intrinsic_returns: Vec<TaintFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReturnDependency {
+    parameter_index: usize,
+    sanitized_for: HashSet<TaintDomain>,
+    steps: Vec<DataflowStep>,
+}
+
+#[derive(Debug, Default)]
+struct ScopeResult {
+    aliases: HashMap<ValueId, ValueId>,
+    taint: HashMap<ValueId, TaintFact>,
 }
 
 pub struct ModuleAnalysis<'a> {
@@ -91,108 +131,27 @@ pub struct ModuleAnalysis<'a> {
 
 impl<'a> ModuleAnalysis<'a> {
     pub fn new(module: &'a ModuleIr) -> Self {
-        let mut producers = HashMap::new();
-        let mut aliases = HashMap::new();
-        let mut taint = HashMap::new();
-        let mut assignments = HashMap::<String, ValueId>::new();
+        let (top_level, functions) = split_scopes(module);
+        let summaries = build_function_summaries(&functions);
 
+        let mut producers = HashMap::new();
         for instruction in &module.instructions {
             if let Some(output) = instruction_output(instruction) {
                 producers.insert(output, instruction);
             }
+        }
 
-            match instruction {
-                Instruction::VariableRead {
-                    output,
-                    name,
-                    location,
-                } => {
-                    if is_untrusted_superglobal(name) {
-                        taint.insert(*output, TaintFact::source(name.clone(), location));
-                    } else if let Some(value) = assignments.get(name) {
-                        aliases.insert(*output, *value);
-                        if let Some(fact) = taint.get(value) {
-                            taint.insert(
-                                *output,
-                                fact.propagated(format!("Read from `{name}`"), location),
-                            );
-                        }
-                    }
-                }
-                Instruction::Assignment {
-                    target,
-                    value,
-                    location,
-                } => {
-                    assignments.insert(target.clone(), *value);
-                    if let Some(fact) = taint.get(value).cloned() {
-                        taint.insert(
-                            *value,
-                            fact.propagated(format!("Assigned to `{target}`"), location),
-                        );
-                    }
-                }
-                Instruction::Concatenate {
-                    output,
-                    operands,
-                    location,
-                } => {
-                    if let Some(fact) = TaintFact::merge_for_concatenation(
-                        operands.iter().filter_map(|value| taint.get(value)),
-                        location,
-                    ) {
-                        taint.insert(*output, fact);
-                    }
-                }
-                Instruction::IndexRead {
-                    output,
-                    collection,
-                    location,
-                    ..
-                } => {
-                    if let Some(fact) = taint.get(collection) {
-                        taint.insert(*output, fact.propagated("Indexed value read", location));
-                    }
-                }
-                Instruction::Call {
-                    output,
-                    target,
-                    call_kind: CallKind::Function,
-                    arguments,
-                    location,
-                } => {
-                    if let Some(argument) = command_sanitizer_argument(target, arguments) {
-                        if let Some(fact) = taint.get(&argument) {
-                            taint.insert(
-                                *output,
-                                fact.sanitized(
-                                    TaintDomain::Command,
-                                    format!(
-                                        "Sanitized for shell command use by `{}`",
-                                        normalize_call(target)
-                                    ),
-                                    location,
-                                ),
-                            );
-                        }
-                    } else if let Some(argument) = sql_sanitizer_argument(target, arguments) {
-                        if let Some(fact) = taint.get(&argument) {
-                            taint.insert(
-                                *output,
-                                fact.sanitized(
-                                    TaintDomain::Sql,
-                                    format!(
-                                        "Sanitized for SQL string use by `{}`",
-                                        normalize_call(target)
-                                    ),
-                                    location,
-                                ),
-                            );
-                        }
-                    }
-                }
-                _ => {}
-            }
+        let mut aliases = HashMap::new();
+        let mut taint = HashMap::new();
+
+        let top_level_result = analyze_scope(&top_level, &summaries, HashMap::new());
+        aliases.extend(top_level_result.aliases);
+        taint.extend(top_level_result.taint);
+
+        for function in &functions {
+            let result = analyze_scope(&function.instructions, &summaries, HashMap::new());
+            aliases.extend(result.aliases);
+            taint.extend(result.taint);
         }
 
         Self {
@@ -255,6 +214,309 @@ impl<'a> ModuleAnalysis<'a> {
         visiting.remove(&value);
         resolved
     }
+}
+
+fn split_scopes<'a>(module: &'a ModuleIr) -> (Vec<&'a Instruction>, Vec<FunctionRegion<'a>>) {
+    struct RegionBuilder<'a> {
+        name: String,
+        parameters: Vec<String>,
+        instructions: Vec<&'a Instruction>,
+        location: SourceLocation,
+    }
+
+    let mut top_level = Vec::new();
+    let mut functions = Vec::new();
+    let mut stack = Vec::<RegionBuilder<'a>>::new();
+
+    for instruction in &module.instructions {
+        match instruction {
+            Instruction::FunctionStart {
+                name,
+                parameters,
+                location,
+            } => stack.push(RegionBuilder {
+                name: name.clone(),
+                parameters: parameters.clone(),
+                instructions: Vec::new(),
+                location: location.clone(),
+            }),
+            Instruction::FunctionEnd { .. } => {
+                if let Some(region) = stack.pop() {
+                    functions.push(FunctionRegion {
+                        name: region.name,
+                        parameters: region.parameters,
+                        instructions: region.instructions,
+                        location: region.location,
+                    });
+                }
+            }
+            _ => {
+                if let Some(region) = stack.last_mut() {
+                    region.instructions.push(instruction);
+                } else {
+                    top_level.push(instruction);
+                }
+            }
+        }
+    }
+
+    functions.reverse();
+    (top_level, functions)
+}
+
+fn build_function_summaries(
+    functions: &[FunctionRegion<'_>],
+) -> HashMap<String, FunctionSummary> {
+    let mut summaries = HashMap::new();
+
+    for _ in 0..=functions.len() {
+        let mut changed = false;
+        for function in functions {
+            let key = normalized_call_name(&function.name);
+            let summary = summarize_function(function, &summaries);
+            if summaries.get(&key) != Some(&summary) {
+                summaries.insert(key, summary);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    summaries
+}
+
+fn summarize_function(
+    function: &FunctionRegion<'_>,
+    summaries: &HashMap<String, FunctionSummary>,
+) -> FunctionSummary {
+    let mut dependencies = Vec::new();
+
+    for (parameter_index, parameter) in function.parameters.iter().enumerate() {
+        let mut initial_variables = HashMap::new();
+        initial_variables.insert(
+            parameter.clone(),
+            TaintFact::parameter(parameter_index, parameter, &function.location),
+        );
+        let result = analyze_scope(&function.instructions, summaries, initial_variables);
+        let source = format!("{SUMMARY_SOURCE_PREFIX}{parameter_index}");
+        let facts = return_facts(&function.instructions, &result.taint)
+            .into_iter()
+            .filter(|fact| fact.source == source)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if let Some(dependency) = summarize_return_dependency(parameter_index, facts) {
+            dependencies.push(dependency);
+        }
+    }
+
+    let intrinsic_result = analyze_scope(&function.instructions, summaries, HashMap::new());
+    let mut intrinsic_returns = Vec::new();
+    for fact in return_facts(&function.instructions, &intrinsic_result.taint) {
+        if fact.source.starts_with(SUMMARY_SOURCE_PREFIX)
+            || intrinsic_returns
+                .iter()
+                .any(|existing: &TaintFact| existing.source == fact.source)
+        {
+            continue;
+        }
+        intrinsic_returns.push(fact.clone());
+    }
+
+    FunctionSummary {
+        dependencies,
+        intrinsic_returns,
+    }
+}
+
+fn summarize_return_dependency(
+    parameter_index: usize,
+    facts: Vec<TaintFact>,
+) -> Option<ReturnDependency> {
+    let mut facts = facts.into_iter();
+    let first = facts.next()?;
+    let mut sanitized_for = first.sanitized_for.clone();
+    for fact in facts {
+        sanitized_for.retain(|domain| fact.sanitized_for.contains(domain));
+    }
+
+    Some(ReturnDependency {
+        parameter_index,
+        sanitized_for,
+        steps: first.steps,
+    })
+}
+
+fn return_facts<'a>(
+    instructions: &[&Instruction],
+    taint: &'a HashMap<ValueId, TaintFact>,
+) -> Vec<&'a TaintFact> {
+    instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            Instruction::Return {
+                value: Some(value), ..
+            } => taint.get(value),
+            _ => None,
+        })
+        .collect()
+}
+
+fn analyze_scope(
+    instructions: &[&Instruction],
+    summaries: &HashMap<String, FunctionSummary>,
+    initial_variables: HashMap<String, TaintFact>,
+) -> ScopeResult {
+    let mut aliases = HashMap::new();
+    let mut taint = HashMap::new();
+    let mut assignments = HashMap::<String, ValueId>::new();
+
+    for instruction in instructions {
+        match instruction {
+            Instruction::VariableRead {
+                output,
+                name,
+                location,
+            } => {
+                if is_untrusted_superglobal(name) {
+                    taint.insert(*output, TaintFact::source(name.clone(), location));
+                } else if let Some(value) = assignments.get(name) {
+                    aliases.insert(*output, *value);
+                    if let Some(fact) = taint.get(value) {
+                        taint.insert(
+                            *output,
+                            fact.propagated(format!("Read from `{name}`"), location),
+                        );
+                    }
+                } else if let Some(fact) = initial_variables.get(name) {
+                    taint.insert(
+                        *output,
+                        fact.propagated(format!("Read from parameter `{name}`"), location),
+                    );
+                }
+            }
+            Instruction::Assignment {
+                target,
+                value,
+                location,
+            } => {
+                assignments.insert(target.clone(), *value);
+                if let Some(fact) = taint.get(value).cloned() {
+                    taint.insert(
+                        *value,
+                        fact.propagated(format!("Assigned to `{target}`"), location),
+                    );
+                }
+            }
+            Instruction::Concatenate {
+                output,
+                operands,
+                location,
+            } => {
+                let facts = operands
+                    .iter()
+                    .filter_map(|value| taint.get(value).cloned())
+                    .collect::<Vec<_>>();
+                if let Some(fact) = TaintFact::merge_for_concatenation(facts, location) {
+                    taint.insert(*output, fact);
+                }
+            }
+            Instruction::IndexRead {
+                output,
+                collection,
+                location,
+                ..
+            } => {
+                if let Some(fact) = taint.get(collection) {
+                    taint.insert(*output, fact.propagated("Indexed value read", location));
+                }
+            }
+            Instruction::Call {
+                output,
+                target,
+                call_kind: CallKind::Function,
+                arguments,
+                location,
+            } => {
+                if let Some(argument) = command_sanitizer_argument(target, arguments) {
+                    if let Some(fact) = taint.get(&argument) {
+                        taint.insert(
+                            *output,
+                            fact.sanitized(
+                                TaintDomain::Command,
+                                format!(
+                                    "Sanitized for shell command use by `{}`",
+                                    normalize_call(target)
+                                ),
+                                location,
+                            ),
+                        );
+                    }
+                } else if let Some(argument) = sql_sanitizer_argument(target, arguments) {
+                    if let Some(fact) = taint.get(&argument) {
+                        taint.insert(
+                            *output,
+                            fact.sanitized(
+                                TaintDomain::Sql,
+                                format!(
+                                    "Sanitized for SQL string use by `{}`",
+                                    normalize_call(target)
+                                ),
+                                location,
+                            ),
+                        );
+                    }
+                } else if let Some(summary) = summaries.get(&normalized_call_name(target)) {
+                    if let Some(fact) = apply_function_summary(summary, target, arguments, &taint, location)
+                    {
+                        taint.insert(*output, fact);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    ScopeResult { aliases, taint }
+}
+
+fn apply_function_summary(
+    summary: &FunctionSummary,
+    target: &str,
+    arguments: &[ValueId],
+    taint: &HashMap<ValueId, TaintFact>,
+    location: &SourceLocation,
+) -> Option<TaintFact> {
+    let mut candidates = Vec::new();
+
+    for dependency in &summary.dependencies {
+        let argument = arguments.get(dependency.parameter_index)?;
+        if let Some(actual) = taint.get(argument) {
+            let mut propagated = actual.clone();
+            propagated
+                .steps
+                .extend(dependency.steps.iter().skip(1).cloned());
+            propagated
+                .sanitized_for
+                .extend(dependency.sanitized_for.iter().copied());
+            propagated.steps.push(DataflowStep {
+                label: format!("Returned from function `{}`", normalize_call(target)),
+                location: location.clone(),
+            });
+            candidates.push(propagated);
+        }
+    }
+
+    for intrinsic in &summary.intrinsic_returns {
+        candidates.push(intrinsic.propagated(
+            format!("Returned from function `{}`", normalize_call(target)),
+            location,
+        ));
+    }
+
+    TaintFact::merge(candidates)
 }
 
 pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
@@ -520,7 +782,10 @@ fn instruction_output(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::IndexRead { output, .. }
         | Instruction::Call { output, .. }
         | Instruction::Opaque { output, .. } => Some(*output),
-        Instruction::Assignment { .. } | Instruction::Return { .. } => None,
+        Instruction::FunctionStart { .. }
+        | Instruction::FunctionEnd { .. }
+        | Instruction::Assignment { .. }
+        | Instruction::Return { .. } => None,
     }
 }
 
@@ -710,6 +975,21 @@ mod tests {
         }
     }
 
+    fn function_start(name: &str, parameters: &[&str], line: usize) -> Instruction {
+        Instruction::FunctionStart {
+            name: name.to_string(),
+            parameters: parameters.iter().map(|value| (*value).to_string()).collect(),
+            location: location(line),
+        }
+    }
+
+    fn function_end(name: &str, line: usize) -> Instruction {
+        Instruction::FunctionEnd {
+            name: name.to_string(),
+            location: location(line),
+        }
+    }
+
     #[test]
     fn reports_tainted_command_with_dataflow() {
         let mut instructions = tainted_input("$_GET");
@@ -723,6 +1003,179 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Critical);
         assert!(findings[0].dataflow.len() >= 3);
+    }
+
+    #[test]
+    fn propagates_taint_through_function_return_summary() {
+        let mut instructions = vec![
+            function_start("passthrough", &["$value"], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$value".to_string(),
+                location: location(2),
+            },
+            Instruction::Return {
+                value: Some(ValueId(10)),
+                location: location(2),
+            },
+            function_end("passthrough", 3),
+        ];
+        instructions.extend(tainted_input("$_GET"));
+        instructions.push(call(2, "passthrough", vec![ValueId(1)], 5));
+        instructions.push(call(3, "system", vec![ValueId(2)], 6));
+
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let findings = TaintedCommandRule.evaluate(&ModuleAnalysis::new(&module));
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0]
+            .dataflow
+            .iter()
+            .any(|step| step.label.contains("passthrough")));
+    }
+
+    #[test]
+    fn propagates_intrinsic_superglobal_return() {
+        let instructions = vec![
+            function_start("request_value", &[], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$_POST".to_string(),
+                location: location(2),
+            },
+            Instruction::IndexRead {
+                output: ValueId(11),
+                collection: ValueId(10),
+                index: None,
+                location: location(2),
+            },
+            Instruction::Return {
+                value: Some(ValueId(11)),
+                location: location(2),
+            },
+            function_end("request_value", 3),
+            call(0, "request_value", Vec::new(), 4),
+            call(1, "system", vec![ValueId(0)], 5),
+        ];
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert_eq!(
+            TaintedCommandRule
+                .evaluate(&ModuleAnalysis::new(&module))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn resolves_nested_function_summaries_to_fixed_point() {
+        let mut instructions = vec![
+            function_start("outer", &["$value"], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$value".to_string(),
+                location: location(2),
+            },
+            call(11, "inner", vec![ValueId(10)], 2),
+            Instruction::Return {
+                value: Some(ValueId(11)),
+                location: location(2),
+            },
+            function_end("outer", 3),
+            function_start("inner", &["$value"], 4),
+            Instruction::VariableRead {
+                output: ValueId(12),
+                name: "$value".to_string(),
+                location: location(5),
+            },
+            Instruction::Return {
+                value: Some(ValueId(12)),
+                location: location(5),
+            },
+            function_end("inner", 6),
+        ];
+        instructions.extend(tainted_input("$_GET"));
+        instructions.push(call(2, "outer", vec![ValueId(1)], 7));
+        instructions.push(call(3, "system", vec![ValueId(2)], 8));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert_eq!(
+            TaintedCommandRule
+                .evaluate(&ModuleAnalysis::new(&module))
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn function_sanitizer_summary_is_domain_specific() {
+        let mut instructions = vec![
+            function_start("safe_shell", &["$value"], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$value".to_string(),
+                location: location(2),
+            },
+            call(11, "escapeshellarg", vec![ValueId(10)], 2),
+            Instruction::Return {
+                value: Some(ValueId(11)),
+                location: location(2),
+            },
+            function_end("safe_shell", 3),
+        ];
+        instructions.extend(tainted_input("$_GET"));
+        instructions.push(call(2, "safe_shell", vec![ValueId(1)], 4));
+        instructions.push(call(3, "system", vec![ValueId(2)], 5));
+        instructions.push(call(4, "mysql_query", vec![ValueId(2)], 6));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let analysis = ModuleAnalysis::new(&module);
+        assert!(TaintedCommandRule.evaluate(&analysis).is_empty());
+        assert_eq!(TaintedSqlRule.evaluate(&analysis).len(), 1);
+    }
+
+    #[test]
+    fn function_local_assignments_do_not_leak_into_module_scope() {
+        let instructions = vec![
+            function_start("capture", &[], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$_GET".to_string(),
+                location: location(2),
+            },
+            Instruction::Assignment {
+                target: "$query".to_string(),
+                value: ValueId(10),
+                location: location(2),
+            },
+            function_end("capture", 3),
+            Instruction::VariableRead {
+                output: ValueId(0),
+                name: "$query".to_string(),
+                location: location(4),
+            },
+            call(1, "mysql_query", vec![ValueId(0)], 4),
+        ];
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        assert!(TaintedSqlRule
+            .evaluate(&ModuleAnalysis::new(&module))
+            .is_empty());
     }
 
     #[test]
