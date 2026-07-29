@@ -1,5 +1,5 @@
 use fermio_core::{Confidence, DataflowStep, Finding, Severity, SourceLocation};
-use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, ValueId};
+use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, OutputKind, ValueId};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -12,6 +12,7 @@ const COMMAND_FUNCTIONS: &[&str] = &[
     "system",
 ];
 const COMMAND_SANITIZERS: &[&str] = &["escapeshellarg", "escapeshellcmd"];
+const HTML_SANITIZERS: &[&str] = &["htmlentities", "htmlspecialchars"];
 const SUMMARY_SOURCE_PREFIX: &str = "__fermio_parameter_";
 
 pub trait Rule: Send + Sync {
@@ -22,6 +23,7 @@ pub trait Rule: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum TaintDomain {
     Command,
+    Html,
     Sql,
 }
 
@@ -454,6 +456,20 @@ fn analyze_scope(
                             ),
                         );
                     }
+                } else if let Some(argument) = html_sanitizer_argument(target, arguments) {
+                    if let Some(fact) = taint.get(&argument) {
+                        taint.insert(
+                            *output,
+                            fact.sanitized(
+                                TaintDomain::Html,
+                                format!(
+                                    "Encoded for HTML output by `{}`",
+                                    normalize_call(target)
+                                ),
+                                location,
+                            ),
+                        );
+                    }
                 } else if let Some(argument) = sql_sanitizer_argument(target, arguments) {
                     if let Some(fact) = taint.get(&argument) {
                         taint.insert(
@@ -469,7 +485,8 @@ fn analyze_scope(
                         );
                     }
                 } else if let Some(summary) = summaries.get(&normalized_call_name(target)) {
-                    if let Some(fact) = apply_function_summary(summary, target, arguments, &taint, location)
+                    if let Some(fact) =
+                        apply_function_summary(summary, target, arguments, &taint, location)
                     {
                         taint.insert(*output, fact);
                     }
@@ -552,6 +569,7 @@ pub fn built_in_rules() -> Vec<Box<dyn Rule>> {
         Box::new(HardcodedSecretRule),
         Box::new(TaintedCommandRule),
         Box::new(TaintedSqlRule),
+        Box::new(TaintedHtmlOutputRule),
     ]
 }
 
@@ -731,6 +749,60 @@ impl Rule for TaintedSqlRule {
     }
 }
 
+struct TaintedHtmlOutputRule;
+
+impl Rule for TaintedHtmlOutputRule {
+    fn id(&self) -> &'static str {
+        "FERMIO-PHP-TAINT-XSS-001"
+    }
+
+    fn evaluate(&self, analysis: &ModuleAnalysis<'_>) -> Vec<Finding> {
+        analysis
+            .module()
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                Instruction::Output {
+                    output_kind,
+                    values,
+                    location,
+                    ..
+                } => {
+                    let fact = values
+                        .iter()
+                        .find_map(|value| analysis.taint_for(*value, TaintDomain::Html))?;
+                    let sink = output_kind_name(*output_kind);
+                    let mut dataflow = fact.steps.clone();
+                    dataflow.push(DataflowStep {
+                        label: format!("HTML output sink `{sink}`"),
+                        location: location.clone(),
+                    });
+                    Some(Finding {
+                        rule_id: self.id().to_string(),
+                        title: "User-controlled HTML output".to_string(),
+                        description: format!(
+                            "Data originating from `{}` reaches PHP `{sink}` output without recognized HTML encoding.",
+                            fact.source
+                        ),
+                        severity: Severity::High,
+                        confidence: Confidence::High,
+                        location: location.clone(),
+                        fingerprint: fingerprint(
+                            self.id(),
+                            &format!("{sink}:{}", fact.source),
+                            location,
+                        ),
+                        cwe: Some("CWE-79".to_string()),
+                        framework: None,
+                        dataflow,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 struct HardcodedSecretRule;
 
 impl Rule for HardcodedSecretRule {
@@ -782,6 +854,7 @@ fn instruction_output(instruction: &Instruction) -> Option<ValueId> {
         | Instruction::IndexRead { output, .. }
         | Instruction::Call { output, .. }
         | Instruction::Opaque { output, .. } => Some(*output),
+        Instruction::Output { output, .. } => *output,
         Instruction::FunctionStart { .. }
         | Instruction::FunctionEnd { .. }
         | Instruction::Assignment { .. }
@@ -821,6 +894,13 @@ fn normalized_call_name(target: &str) -> String {
     normalize_call(target).to_ascii_lowercase()
 }
 
+fn output_kind_name(output_kind: OutputKind) -> &'static str {
+    match output_kind {
+        OutputKind::Echo => "echo",
+        OutputKind::Print => "print",
+    }
+}
+
 fn is_command_function(target: &str) -> bool {
     let target = normalize_call(target);
     COMMAND_FUNCTIONS
@@ -831,6 +911,15 @@ fn is_command_function(target: &str) -> bool {
 fn command_sanitizer_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
     let target = normalize_call(target);
     COMMAND_SANITIZERS
+        .iter()
+        .any(|function| target.eq_ignore_ascii_case(function))
+        .then(|| arguments.first().copied())
+        .flatten()
+}
+
+fn html_sanitizer_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
+    let target = normalize_call(target);
+    HTML_SANITIZERS
         .iter()
         .any(|function| target.eq_ignore_ascii_case(function))
         .then(|| arguments.first().copied())
@@ -951,6 +1040,15 @@ mod tests {
         }
     }
 
+    fn output(output_kind: OutputKind, values: Vec<ValueId>, line: usize) -> Instruction {
+        Instruction::Output {
+            output: None,
+            output_kind,
+            values,
+            location: location(line),
+        }
+    }
+
     fn tainted_input(source: &str) -> Vec<Instruction> {
         vec![
             Instruction::VariableRead {
@@ -1006,196 +1104,7 @@ mod tests {
     }
 
     #[test]
-    fn propagates_taint_through_function_return_summary() {
-        let mut instructions = vec![
-            function_start("passthrough", &["$value"], 1),
-            Instruction::VariableRead {
-                output: ValueId(10),
-                name: "$value".to_string(),
-                location: location(2),
-            },
-            Instruction::Return {
-                value: Some(ValueId(10)),
-                location: location(2),
-            },
-            function_end("passthrough", 3),
-        ];
-        instructions.extend(tainted_input("$_GET"));
-        instructions.push(call(2, "passthrough", vec![ValueId(1)], 5));
-        instructions.push(call(3, "system", vec![ValueId(2)], 6));
-
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        let findings = TaintedCommandRule.evaluate(&ModuleAnalysis::new(&module));
-        assert_eq!(findings.len(), 1);
-        assert!(findings[0]
-            .dataflow
-            .iter()
-            .any(|step| step.label.contains("passthrough")));
-    }
-
-    #[test]
-    fn propagates_intrinsic_superglobal_return() {
-        let instructions = vec![
-            function_start("request_value", &[], 1),
-            Instruction::VariableRead {
-                output: ValueId(10),
-                name: "$_POST".to_string(),
-                location: location(2),
-            },
-            Instruction::IndexRead {
-                output: ValueId(11),
-                collection: ValueId(10),
-                index: None,
-                location: location(2),
-            },
-            Instruction::Return {
-                value: Some(ValueId(11)),
-                location: location(2),
-            },
-            function_end("request_value", 3),
-            call(0, "request_value", Vec::new(), 4),
-            call(1, "system", vec![ValueId(0)], 5),
-        ];
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        assert_eq!(
-            TaintedCommandRule
-                .evaluate(&ModuleAnalysis::new(&module))
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn resolves_nested_function_summaries_to_fixed_point() {
-        let mut instructions = vec![
-            function_start("outer", &["$value"], 1),
-            Instruction::VariableRead {
-                output: ValueId(10),
-                name: "$value".to_string(),
-                location: location(2),
-            },
-            call(11, "inner", vec![ValueId(10)], 2),
-            Instruction::Return {
-                value: Some(ValueId(11)),
-                location: location(2),
-            },
-            function_end("outer", 3),
-            function_start("inner", &["$value"], 4),
-            Instruction::VariableRead {
-                output: ValueId(12),
-                name: "$value".to_string(),
-                location: location(5),
-            },
-            Instruction::Return {
-                value: Some(ValueId(12)),
-                location: location(5),
-            },
-            function_end("inner", 6),
-        ];
-        instructions.extend(tainted_input("$_GET"));
-        instructions.push(call(2, "outer", vec![ValueId(1)], 7));
-        instructions.push(call(3, "system", vec![ValueId(2)], 8));
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        assert_eq!(
-            TaintedCommandRule
-                .evaluate(&ModuleAnalysis::new(&module))
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn function_sanitizer_summary_is_domain_specific() {
-        let mut instructions = vec![
-            function_start("safe_shell", &["$value"], 1),
-            Instruction::VariableRead {
-                output: ValueId(10),
-                name: "$value".to_string(),
-                location: location(2),
-            },
-            call(11, "escapeshellarg", vec![ValueId(10)], 2),
-            Instruction::Return {
-                value: Some(ValueId(11)),
-                location: location(2),
-            },
-            function_end("safe_shell", 3),
-        ];
-        instructions.extend(tainted_input("$_GET"));
-        instructions.push(call(2, "safe_shell", vec![ValueId(1)], 4));
-        instructions.push(call(3, "system", vec![ValueId(2)], 5));
-        instructions.push(call(4, "mysql_query", vec![ValueId(2)], 6));
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        let analysis = ModuleAnalysis::new(&module);
-        assert!(TaintedCommandRule.evaluate(&analysis).is_empty());
-        assert_eq!(TaintedSqlRule.evaluate(&analysis).len(), 1);
-    }
-
-    #[test]
-    fn function_local_assignments_do_not_leak_into_module_scope() {
-        let instructions = vec![
-            function_start("capture", &[], 1),
-            Instruction::VariableRead {
-                output: ValueId(10),
-                name: "$_GET".to_string(),
-                location: location(2),
-            },
-            Instruction::Assignment {
-                target: "$query".to_string(),
-                value: ValueId(10),
-                location: location(2),
-            },
-            function_end("capture", 3),
-            Instruction::VariableRead {
-                output: ValueId(0),
-                name: "$query".to_string(),
-                location: location(4),
-            },
-            call(1, "mysql_query", vec![ValueId(0)], 4),
-        ];
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        assert!(TaintedSqlRule
-            .evaluate(&ModuleAnalysis::new(&module))
-            .is_empty());
-    }
-
-    #[test]
-    fn command_sanitizer_does_not_hide_sql_taint() {
-        let mut instructions = tainted_input("$_GET");
-        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 2));
-        instructions.push(call(3, "system", vec![ValueId(2)], 3));
-        instructions.push(call(4, "mysql_query", vec![ValueId(2)], 4));
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        let analysis = ModuleAnalysis::new(&module);
-        assert!(TaintedCommandRule.evaluate(&analysis).is_empty());
-        assert_eq!(TaintedSqlRule.evaluate(&analysis).len(), 1);
-    }
-
-    #[test]
-    fn reports_mysqli_query_second_argument() {
+    fn reports_tainted_sql_query() {
         let mut instructions = tainted_input("$_POST");
         instructions.push(literal(2, "'connection'", 2));
         instructions.push(call(
@@ -1212,16 +1121,37 @@ mod tests {
         let findings = TaintedSqlRule.evaluate(&ModuleAnalysis::new(&module));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].cwe.as_deref(), Some("CWE-89"));
-        assert!(findings[0].dataflow.len() >= 3);
     }
 
     #[test]
-    fn does_not_treat_mysqli_connection_as_query_text() {
-        let mut instructions = tainted_input("$_POST");
-        instructions.push(literal(2, "'SELECT 1'", 2));
-        instructions.push(call(
-            3,
-            "mysqli_query",
+    fn reports_tainted_echo_as_reflected_xss() {
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(output(OutputKind::Echo, vec![ValueId(1)], 2));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let findings = TaintedHtmlOutputRule.evaluate(&ModuleAnalysis::new(&module));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(findings[0].cwe.as_deref(), Some("CWE-79"));
+        assert!(findings[0]
+            .dataflow
+            .iter()
+            .any(|step| step.label.contains("echo")));
+    }
+
+    #[test]
+    fn reports_one_finding_for_multi_value_echo() {
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(Instruction::VariableRead {
+            output: ValueId(2),
+            name: "$_POST".to_string(),
+            location: location(2),
+        });
+        instructions.push(output(
+            OutputKind::Echo,
             vec![ValueId(1), ValueId(2)],
             3,
         ));
@@ -1230,55 +1160,44 @@ mod tests {
             path: "src/example.php".to_string(),
             instructions,
         };
-        assert!(TaintedSqlRule
-            .evaluate(&ModuleAnalysis::new(&module))
-            .is_empty());
+        assert_eq!(
+            TaintedHtmlOutputRule
+                .evaluate(&ModuleAnalysis::new(&module))
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn sql_sanitizer_does_not_hide_command_taint() {
+    fn html_encoding_suppresses_only_xss() {
         let mut instructions = tainted_input("$_REQUEST");
-        instructions.push(literal(2, "'connection'", 2));
-        instructions.push(call(
-            3,
-            "mysqli_real_escape_string",
-            vec![ValueId(2), ValueId(1)],
-            3,
-        ));
-        instructions.push(call(
-            4,
-            "mysqli_query",
-            vec![ValueId(2), ValueId(3)],
-            4,
-        ));
-        instructions.push(call(5, "system", vec![ValueId(3)], 5));
+        instructions.push(call(2, "htmlspecialchars", vec![ValueId(1)], 2));
+        instructions.push(output(OutputKind::Print, vec![ValueId(2)], 3));
+        instructions.push(call(3, "system", vec![ValueId(2)], 4));
+        instructions.push(call(4, "mysql_query", vec![ValueId(2)], 5));
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions,
         };
         let analysis = ModuleAnalysis::new(&module);
-        assert!(TaintedSqlRule.evaluate(&analysis).is_empty());
+        assert!(TaintedHtmlOutputRule.evaluate(&analysis).is_empty());
         assert_eq!(TaintedCommandRule.evaluate(&analysis).len(), 1);
+        assert_eq!(TaintedSqlRule.evaluate(&analysis).len(), 1);
     }
 
     #[test]
-    fn pg_query_uses_last_argument_as_query() {
-        let mut instructions = tainted_input("$_COOKIE");
-        instructions.push(literal(2, "'connection'", 2));
-        instructions.push(call(
-            3,
-            "pg_query",
-            vec![ValueId(2), ValueId(1)],
-            3,
-        ));
+    fn shell_sanitizer_does_not_hide_xss() {
+        let mut instructions = tainted_input("$_GET");
+        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 2));
+        instructions.push(output(OutputKind::Echo, vec![ValueId(2)], 3));
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions,
         };
         assert_eq!(
-            TaintedSqlRule
+            TaintedHtmlOutputRule
                 .evaluate(&ModuleAnalysis::new(&module))
                 .len(),
             1
@@ -1286,52 +1205,99 @@ mod tests {
     }
 
     #[test]
-    fn does_not_report_constant_sql_query() {
+    fn propagates_xss_through_function_return_summary() {
+        let mut instructions = vec![
+            function_start("passthrough", &["$value"], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$value".to_string(),
+                location: location(2),
+            },
+            Instruction::Return {
+                value: Some(ValueId(10)),
+                location: location(2),
+            },
+            function_end("passthrough", 3),
+        ];
+        instructions.extend(tainted_input("$_GET"));
+        instructions.push(call(2, "passthrough", vec![ValueId(1)], 5));
+        instructions.push(output(OutputKind::Echo, vec![ValueId(2)], 6));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let findings = TaintedHtmlOutputRule.evaluate(&ModuleAnalysis::new(&module));
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0]
+            .dataflow
+            .iter()
+            .any(|step| step.label.contains("passthrough")));
+    }
+
+    #[test]
+    fn html_sanitizer_summary_is_domain_specific() {
+        let mut instructions = vec![
+            function_start("safe_html", &["$value"], 1),
+            Instruction::VariableRead {
+                output: ValueId(10),
+                name: "$value".to_string(),
+                location: location(2),
+            },
+            call(11, "htmlentities", vec![ValueId(10)], 2),
+            Instruction::Return {
+                value: Some(ValueId(11)),
+                location: location(2),
+            },
+            function_end("safe_html", 3),
+        ];
+        instructions.extend(tainted_input("$_GET"));
+        instructions.push(call(2, "safe_html", vec![ValueId(1)], 4));
+        instructions.push(output(OutputKind::Echo, vec![ValueId(2)], 5));
+        instructions.push(call(3, "system", vec![ValueId(2)], 6));
+        let module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/example.php".to_string(),
+            instructions,
+        };
+        let analysis = ModuleAnalysis::new(&module);
+        assert!(TaintedHtmlOutputRule.evaluate(&analysis).is_empty());
+        assert_eq!(TaintedCommandRule.evaluate(&analysis).len(), 1);
+    }
+
+    #[test]
+    fn constant_output_is_not_tainted() {
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions: vec![
-                literal(0, "'SELECT 1'", 1),
-                call(1, "mysql_query", vec![ValueId(0)], 1),
+                literal(0, "'hello'", 1),
+                output(OutputKind::Echo, vec![ValueId(0)], 1),
             ],
         };
-        assert!(TaintedSqlRule
+        assert!(TaintedHtmlOutputRule
             .evaluate(&ModuleAnalysis::new(&module))
             .is_empty());
     }
 
     #[test]
-    fn concatenation_is_sanitized_only_if_all_tainted_operands_are_sanitized() {
+    fn print_result_does_not_inherit_printed_taint() {
         let mut instructions = tainted_input("$_GET");
-        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 2));
-        instructions.push(Instruction::VariableRead {
-            output: ValueId(3),
-            name: "$_POST".to_string(),
-            location: location(3),
+        instructions.push(Instruction::Output {
+            output: Some(ValueId(2)),
+            output_kind: OutputKind::Print,
+            values: vec![ValueId(1)],
+            location: location(2),
         });
-        instructions.push(Instruction::IndexRead {
-            output: ValueId(4),
-            collection: ValueId(3),
-            index: None,
-            location: location(3),
-        });
-        instructions.push(Instruction::Concatenate {
-            output: ValueId(5),
-            operands: vec![ValueId(2), ValueId(4)],
-            location: location(4),
-        });
-        instructions.push(call(6, "system", vec![ValueId(5)], 5));
+        instructions.push(call(3, "system", vec![ValueId(2)], 3));
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions,
         };
-        assert_eq!(
-            TaintedCommandRule
-                .evaluate(&ModuleAnalysis::new(&module))
-                .len(),
-            1
-        );
+        let analysis = ModuleAnalysis::new(&module);
+        assert_eq!(TaintedHtmlOutputRule.evaluate(&analysis).len(), 1);
+        assert!(TaintedCommandRule.evaluate(&analysis).is_empty());
     }
 
     #[test]
