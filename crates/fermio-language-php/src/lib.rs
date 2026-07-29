@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use fermio_core::{Diagnostic, DiagnosticSeverity, SourceLocation};
-use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, ValueId};
+use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, OutputKind, ValueId};
 use fermio_language_api::{FrontendOutput, LanguageFrontend, ProjectDetection, SourceFile};
 use serde_json::Value;
 use std::{fs, path::Path};
@@ -123,6 +123,10 @@ impl<'a> PhpLowerer<'a> {
                 self.lower_function(node);
                 return;
             }
+            "echo_statement" => {
+                self.lower_echo(node);
+                return;
+            }
             "assignment_expression" | "reference_assignment_expression" => {
                 self.lower_assignment(node);
                 return;
@@ -177,6 +181,34 @@ impl<'a> PhpLowerer<'a> {
         });
     }
 
+    fn lower_echo(&mut self, node: Node<'_>) {
+        let mut values = Vec::new();
+        let mut cursor = node.walk();
+        for expression in node.named_children(&mut cursor) {
+            values.push(self.lower_expression(expression));
+        }
+        self.instructions.push(Instruction::Output {
+            output: None,
+            output_kind: OutputKind::Echo,
+            values,
+            location: source_location(node, self.path),
+        });
+    }
+
+    fn lower_print(&mut self, node: Node<'_>) -> ValueId {
+        let value = first_named_child(node)
+            .map(|child| self.lower_expression(child))
+            .unwrap_or_else(|| self.lower_opaque(node));
+        let output = self.next_value();
+        self.instructions.push(Instruction::Output {
+            output: Some(output),
+            output_kind: OutputKind::Print,
+            values: vec![value],
+            location: source_location(node, self.path),
+        });
+        output
+    }
+
     fn lower_assignment(&mut self, node: Node<'_>) -> ValueId {
         let right = node
             .child_by_field_name("right")
@@ -226,6 +258,7 @@ impl<'a> PhpLowerer<'a> {
                 ),
             ),
             "null" => self.lower_literal(node, LiteralValue::Null),
+            "print_intrinsic" => self.lower_print(node),
             "assignment_expression" | "reference_assignment_expression" => {
                 self.lower_assignment(node)
             }
@@ -489,6 +522,38 @@ mod tests {
         }));
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(instruction, Instruction::IndexRead { index: Some(_), .. })
+        }));
+    }
+
+    #[test]
+    fn lowers_echo_values_as_output() {
+        let output = lower("<?php echo $_GET['name'], 'ok';");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Output {
+                    output: None,
+                    output_kind: OutputKind::Echo,
+                    values,
+                    ..
+                } if values.len() == 2
+            )
+        }));
+    }
+
+    #[test]
+    fn lowers_print_as_output_with_result_value() {
+        let output = lower("<?php $result = print $_GET['name'];");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Output {
+                    output: Some(_),
+                    output_kind: OutputKind::Print,
+                    values,
+                    ..
+                } if values.len() == 1
+            )
         }));
     }
 
