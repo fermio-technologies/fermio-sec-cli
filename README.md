@@ -15,7 +15,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Terminal, JSON and SARIF 2.1.0 reports
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
-- Intraprocedural PHP command and SQL taint analysis
+- PHP command, SQL and reflected-XSS taint analysis
 - Limited same-file function return summaries
 - SARIF code-flow traces for taint findings
 - `.gitignore` and `.fermioignore` support
@@ -38,7 +38,7 @@ cargo run -p fermio-cli -- rules
 
 The command source-to-sink analysis follows PHP superglobal input through indexed reads, assignments, variable reads and string concatenation into command execution functions such as `system`, `exec` and `shell_exec`.
 
-The functions `escapeshellarg()` and `escapeshellcmd()` are recognized as command sanitizers. A value sanitized for command use remains tainted for unrelated domains such as SQL.
+The functions `escapeshellarg()` and `escapeshellcmd()` are recognized as command sanitizers. A value sanitized for command use remains tainted for unrelated domains such as SQL and HTML output.
 
 ## SQL taint analysis
 
@@ -52,13 +52,23 @@ The initial sink set includes:
 - `odbc_exec`
 - `sqlsrv_query` and `sqlsrv_prepare`
 
-The initial SQL sanitizer set includes `mysql_real_escape_string`, the procedural MySQLi escape functions, and PostgreSQL string, literal and identifier escaping functions. Sanitization is domain-specific: SQL escaping does not suppress command-injection findings.
+The initial SQL sanitizer set includes `mysql_real_escape_string`, the procedural MySQLi escape functions, and PostgreSQL string, literal and identifier escaping functions. Sanitization is domain-specific: SQL escaping does not suppress command-injection or reflected-XSS findings.
 
 Prepared statements are not treated as safe merely because a function is named `prepare`; tainted SQL structure passed to `pg_prepare` or `sqlsrv_prepare` is still reported. Parameter values passed separately to parameterized APIs are outside the SQL-text argument and are not classified as query structure.
 
+## Reflected XSS analysis
+
+The reflected-XSS analysis reports `FERMIO-PHP-TAINT-XSS-001` when PHP superglobal input reaches an `echo` or `print` output instruction without recognized HTML encoding.
+
+The initial HTML sanitizer set contains `htmlspecialchars()` and `htmlentities()`. Encoding is tracked only for the HTML domain: it does not suppress SQL or command-injection findings, and shell or SQL escaping does not suppress XSS findings.
+
+`echo` can contain multiple expressions, but Fermio emits at most one finding for each output statement. `print` is modeled as an output sink that returns an independent result value, so the printed input does not taint variables assigned from the return value of `print`.
+
+This first slice models direct PHP output as an HTML response context. It does not yet distinguish HTML text, attribute, JavaScript, CSS or URL subcontexts, nor does it model template engines or framework response objects.
+
 ## Limited function summaries
 
-Named, same-file PHP functions receive parameter-to-return summaries. Taint and domain-specific sanitizer state can cross a helper return before reaching a command or SQL sink.
+Named, same-file PHP functions receive parameter-to-return summaries. Taint and domain-specific sanitizer state can cross a helper return before reaching a command, SQL or HTML output sink.
 
 For example, the analyzer can follow the input through this helper:
 
@@ -67,7 +77,7 @@ function passthrough($value) {
     return $value;
 }
 
-system(passthrough($_GET['cmd']));
+echo passthrough($_GET['name']);
 ```
 
 Summaries are calculated to a bounded fixed point, allowing short chains of named helper calls. Functions that directly return superglobal input are also summarized. Local assignments are analyzed in an isolated function scope and do not leak into module-level variables.
