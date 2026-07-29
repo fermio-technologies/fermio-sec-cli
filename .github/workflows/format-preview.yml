@@ -1,0 +1,31 @@
+name: Format Preview
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+
+      - name: Format workspace
+        run: cargo fmt --all
+
+      - name: Create formatting patch
+        run: git diff --binary > rustfmt.patch
+
+      - name: Upload formatting patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-patch
+          path: rustfmt.patch
+          if-no-files-found: error
