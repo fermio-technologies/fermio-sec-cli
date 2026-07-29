@@ -37,6 +37,13 @@ pub enum CallKind {
     Dynamic,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputKind {
+    Echo,
+    Print,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
@@ -80,6 +87,12 @@ pub enum Instruction {
         target: String,
         call_kind: CallKind,
         arguments: Vec<ValueId>,
+        location: SourceLocation,
+    },
+    Output {
+        output: Option<ValueId>,
+        output_kind: OutputKind,
+        values: Vec<ValueId>,
         location: SourceLocation,
     },
     Return {
