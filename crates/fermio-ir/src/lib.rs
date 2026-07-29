@@ -40,6 +40,15 @@ pub enum CallKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Instruction {
+    FunctionStart {
+        name: String,
+        parameters: Vec<String>,
+        location: SourceLocation,
+    },
+    FunctionEnd {
+        name: String,
+        location: SourceLocation,
+    },
     VariableRead {
         output: ValueId,
         name: String,

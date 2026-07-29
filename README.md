@@ -16,6 +16,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
 - Intraprocedural PHP command and SQL taint analysis
+- Limited same-file function return summaries
 - SARIF code-flow traces for taint findings
 - `.gitignore` and `.fermioignore` support
 - File-count and file-size scan limits
@@ -55,7 +56,25 @@ The initial SQL sanitizer set includes `mysql_real_escape_string`, the procedura
 
 Prepared statements are not treated as safe merely because a function is named `prepare`; tainted SQL structure passed to `pg_prepare` or `sqlsrv_prepare` is still reported. Parameter values passed separately to parameterized APIs are outside the SQL-text argument and are not classified as query structure.
 
-SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations and the sink. The trace does not contain runtime values or source snippets.
+## Limited function summaries
+
+Named, same-file PHP functions receive parameter-to-return summaries. Taint and domain-specific sanitizer state can cross a helper return before reaching a command or SQL sink.
+
+For example, the analyzer can follow the input through this helper:
+
+```php
+function passthrough($value) {
+    return $value;
+}
+
+system(passthrough($_GET['cmd']));
+```
+
+Summaries are calculated to a bounded fixed point, allowing short chains of named helper calls. Functions that directly return superglobal input are also summarized. Local assignments are analyzed in an isolated function scope and do not leak into module-level variables.
+
+This increment does not model methods, closures, anonymous functions, namespaces across files, omitted default arguments, recursive behavior, references, variadic argument expansion, or parameters flowing directly into sinks inside a helper.
+
+SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations, helper returns and the sink. The trace does not contain runtime values or source snippets.
 
 ## Baseline workflow
 
