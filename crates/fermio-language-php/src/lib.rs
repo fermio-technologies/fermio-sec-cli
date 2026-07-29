@@ -119,6 +119,10 @@ impl<'a> PhpLowerer<'a> {
 
     fn lower_node(&mut self, node: Node<'_>) {
         match node.kind() {
+            "function_definition" => {
+                self.lower_function(node);
+                return;
+            }
             "assignment_expression" | "reference_assignment_expression" => {
                 self.lower_assignment(node);
                 return;
@@ -144,6 +148,33 @@ impl<'a> PhpLowerer<'a> {
         for child in node.named_children(&mut cursor) {
             self.lower_node(child);
         }
+    }
+
+    fn lower_function(&mut self, node: Node<'_>) {
+        let name = node
+            .child_by_field_name("name")
+            .and_then(|child| node_text(child, self.source))
+            .unwrap_or_else(|| "<anonymous>".to_string());
+        let parameters = node
+            .child_by_field_name("parameters")
+            .map(|parameters| parameter_names(parameters, self.source))
+            .unwrap_or_default();
+        let location = source_location(node, self.path);
+
+        self.instructions.push(Instruction::FunctionStart {
+            name: name.clone(),
+            parameters,
+            location: location.clone(),
+        });
+
+        if let Some(body) = node.child_by_field_name("body") {
+            self.lower_node(body);
+        }
+
+        self.instructions.push(Instruction::FunctionEnd {
+            name,
+            location,
+        });
     }
 
     fn lower_assignment(&mut self, node: Node<'_>) -> ValueId {
@@ -305,6 +336,20 @@ impl<'a> PhpLowerer<'a> {
     }
 }
 
+fn parameter_names(parameters: Node<'_>, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut cursor = parameters.walk();
+    for parameter in parameters.named_children(&mut cursor) {
+        if let Some(name) = parameter
+            .child_by_field_name("name")
+            .and_then(|child| node_text(child, source))
+        {
+            names.push(name);
+        }
+    }
+    names
+}
+
 fn call_target(node: Node<'_>, source: &[u8]) -> (String, CallKind) {
     match node.kind() {
         "function_call_expression" => {
@@ -444,6 +489,18 @@ mod tests {
         }));
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(instruction, Instruction::IndexRead { index: Some(_), .. })
+        }));
+    }
+
+    #[test]
+    fn lowers_named_function_boundaries_and_parameters() {
+        let output = lower("<?php function passthrough($value, $suffix = '') { return $value . $suffix; }");
+
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::FunctionStart { name, parameters, .. } if name == "passthrough" && parameters == &["$value", "$suffix"])
+        }));
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::FunctionEnd { name, .. } if name == "passthrough")
         }));
     }
 
