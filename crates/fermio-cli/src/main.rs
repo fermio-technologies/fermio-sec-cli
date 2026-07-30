@@ -103,11 +103,7 @@ fn run() -> Result<()> {
             let configured_rules = select_rules(&loaded_config.config)?;
             let scan_config = &loaded_config.config.scan;
 
-            let include_vendor = if include_vendor {
-                true
-            } else {
-                scan_config.include_vendor.unwrap_or(false)
-            };
+            let include_vendor = include_vendor || scan_config.include_vendor.unwrap_or(false);
             let max_files = max_files
                 .or(scan_config.max_files)
                 .unwrap_or(DEFAULT_MAX_FILES);
@@ -236,15 +232,19 @@ fn select_rules(config: &FermioConfig) -> Result<Vec<Box<dyn Rule>>> {
         .collect())
 }
 
-fn apply_severity_overrides(
-    result: &mut ScanResult,
-    overrides: &BTreeMap<String, Severity>,
-) {
+fn apply_severity_overrides(result: &mut ScanResult, overrides: &BTreeMap<String, Severity>) {
     for finding in &mut result.findings {
         if let Some(severity) = overrides.get(&finding.rule_id) {
             finding.severity = *severity;
         }
     }
+    result.findings.sort_by(|left, right| {
+        right
+            .severity
+            .cmp(&left.severity)
+            .then_with(|| left.location.path.cmp(&right.location.path))
+            .then_with(|| left.location.start_line.cmp(&right.location.start_line))
+    });
 }
 
 fn read_baseline_file(path: &Path) -> Result<FindingBaseline> {
