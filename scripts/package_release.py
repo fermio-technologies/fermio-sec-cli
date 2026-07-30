@@ -35,7 +35,12 @@ def package(args: argparse.Namespace) -> tuple[Path, Path]:
         raise FileNotFoundError(f"release binary does not exist: {binary}")
 
     repository_root = Path(__file__).resolve().parent.parent
-    required_documents = [repository_root / "README.md", repository_root / "LICENSE"]
+    required_documents = [
+        repository_root / "README.md",
+        repository_root / "INSTALL.md",
+        repository_root / "CHANGELOG.md",
+        repository_root / "LICENSE",
+    ]
     missing = [str(path) for path in required_documents if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"required release documents are missing: {', '.join(missing)}")
