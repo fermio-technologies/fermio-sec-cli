@@ -322,7 +322,9 @@ mod tests {
             "#,
         )
         .expect("configuration syntax should parse");
-        let error = select_rules(&config).expect_err("unknown rules must fail");
+        let error = select_rules(&config)
+            .err()
+            .expect("unknown rules must fail");
         assert!(error.to_string().contains("unknown rule"));
     }
 
