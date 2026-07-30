@@ -46,12 +46,16 @@ jobs:
         include:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            python: python3
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
+            python: python
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+            python: python3
           - runner: macos-15
             target: aarch64-apple-darwin
+            python: python3
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -79,7 +83,7 @@ jobs:
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             binary="${binary}.exe"
           fi
-          python scripts/package_release.py \
+          ${{ matrix.python }} scripts/package_release.py \
             --binary "$binary" \
             --target "${{ matrix.target }}" \
             --version "${GITHUB_REF_NAME}" \
