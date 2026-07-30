@@ -9,7 +9,20 @@
 - Para build a partir do código: **Rust 1.88.0** (ver `rust-toolchain.toml`).
 - Um projeto PHP local para escanear (Composer opcional; WordPress também é detectado por layout).
 
-## Instalação a partir do release
+## Instalação one-line
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
+```
+
+O script detecta o OS/arch, baixa o archive do GitHub Releases, valida o SHA-256 e instala em `~/.local/bin` (ajustando o PATH se necessário).
+
+```bash
+# Versão específica
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh -s -- --version v0.1.0-rc.1
+```
+
+## Instalação a partir do release (manual)
 
 Tagged releases publicam archives para:
 

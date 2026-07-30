@@ -39,7 +39,13 @@ flowchart LR
 
 ## Quick install
 
-=== "Release"
+=== "curl | sh"
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
+    ```
+
+=== "Release manual"
 
     ```bash
     sha256sum -c fermio-sec-*.tar.gz.sha256

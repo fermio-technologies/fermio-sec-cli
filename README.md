@@ -30,7 +30,11 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 
 ## Installation
 
-Tagged releases publish archives for Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon. Every archive includes a SHA-256 checksum, installation instructions, the changelog and the AGPL-3.0 license.
+```bash
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
+```
+
+Tagged releases also publish archives for Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon. Every archive includes a SHA-256 checksum, installation instructions, the changelog and the AGPL-3.0 license.
 
 See [`INSTALL.md`](INSTALL.md) for checksum verification, binary installation and source-build instructions.
 

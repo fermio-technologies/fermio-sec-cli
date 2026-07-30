@@ -1,5 +1,30 @@
 # Install Fermio Sec CLI
 
+## One-line install (Linux / macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
+```
+
+The script detects your OS/architecture, downloads the matching GitHub Release archive, verifies the SHA-256 checksum, and installs `fermio-sec` to `~/.local/bin` (adding PATH setup when needed).
+
+Useful variants:
+
+```bash
+# Specific version
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh -s -- --version v0.1.0-rc.1
+
+# Custom install directory
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh -s -- --bin-dir "$HOME/bin"
+
+# Do not edit shell startup files
+curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh -s -- --no-modify-path
+```
+
+Environment alternatives: `FERMIO_VERSION`, `FERMIO_BIN_DIR`, `FERMIO_INSTALL_NO_MODIFY_PATH=1`.
+
+Windows is not covered by the shell installer — use the `.zip` archive below.
+
 ## Supported release archives
 
 Tagged releases publish the following targets:
@@ -34,7 +59,7 @@ $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw "Checksum mismatch" }
 ```
 
-## Install
+## Install manually
 
 Extract the archive and move the executable to a directory in your `PATH`.
 
@@ -59,7 +84,6 @@ fermio-sec.exe --version
 Rust `1.88.0` is the supported toolchain for this release candidate.
 
 ```bash
-cargo generate-lockfile
 cargo build --locked --release -p fermio-cli
 ./target/release/fermio-sec --version
 ```

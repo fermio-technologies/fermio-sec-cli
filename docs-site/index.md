@@ -39,7 +39,13 @@ flowchart LR
 
 ## Instalação rápida
 
-=== "Release"
+=== "curl | sh"
+
+    ```bash
+    curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
+    ```
+
+=== "Release manual"
 
     ```bash
     # Baixe o archive do GitHub Releases, verifique o checksum e instale:
