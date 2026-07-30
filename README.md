@@ -26,6 +26,12 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - File-count and file-size scan limits
 - Local-only scans by default
 
+## Installation
+
+Tagged releases publish archives for Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon. Every archive includes a SHA-256 checksum, installation instructions, the changelog and the Apache-2.0 license.
+
+See [`INSTALL.md`](INSTALL.md) for checksum verification, binary installation and source-build instructions.
+
 ## Commands
 
 ```bash
@@ -220,4 +226,8 @@ generated/**
 
 Default scan limits are 100,000 PHP files and 2 MiB per file. Oversized files are skipped with a diagnostic; exceeding the total file-count limit stops the scan.
 
-See [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the architecture and remaining release work.
+## Release validation
+
+The CI release gate covers formatting, Clippy, unit and documentation tests, framework and taint fixtures, external rulepack loading, resource-limit regressions, and a 250-file performance smoke test. Tagged releases package four supported targets and publish SHA-256 checksums plus the dependency lockfile used by every build.
+
+See [`CHANGELOG.md`](CHANGELOG.md), [`SECURITY.md`](SECURITY.md), [`docs/RELEASE.md`](docs/RELEASE.md), [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
