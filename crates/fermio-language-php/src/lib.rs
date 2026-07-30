@@ -3,7 +3,7 @@ use fermio_core::{Diagnostic, DiagnosticSeverity, SourceLocation};
 use fermio_ir::{CallKind, Instruction, LiteralValue, ModuleIr, OutputKind, ValueId};
 use fermio_language_api::{FrontendOutput, LanguageFrontend, ProjectDetection, SourceFile};
 use serde_json::Value;
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 use tree_sitter::{Node, Parser};
 
 #[derive(Debug, Default)]
@@ -105,6 +105,7 @@ struct PhpLowerer<'a> {
     path: &'a Path,
     next_value: u32,
     instructions: Vec<Instruction>,
+    variable_types: HashMap<String, String>,
 }
 
 impl<'a> PhpLowerer<'a> {
@@ -114,6 +115,7 @@ impl<'a> PhpLowerer<'a> {
             path,
             next_value: 0,
             instructions: Vec::new(),
+            variable_types: HashMap::new(),
         }
     }
 
@@ -171,9 +173,11 @@ impl<'a> PhpLowerer<'a> {
             location: location.clone(),
         });
 
+        let outer_types = std::mem::take(&mut self.variable_types);
         if let Some(body) = node.child_by_field_name("body") {
             self.lower_node(body);
         }
+        self.variable_types = outer_types;
 
         self.instructions.push(Instruction::FunctionEnd {
             name,
@@ -210,14 +214,23 @@ impl<'a> PhpLowerer<'a> {
     }
 
     fn lower_assignment(&mut self, node: Node<'_>) -> ValueId {
-        let right = node
-            .child_by_field_name("right")
-            .map(|child| self.lower_expression(child))
-            .unwrap_or_else(|| self.lower_opaque(node));
-        let target = node
-            .child_by_field_name("left")
+        let left = node.child_by_field_name("left");
+        let right_node = node.child_by_field_name("right");
+        let target = left
             .and_then(|child| node_text(child, self.source))
             .unwrap_or_else(|| "<unknown>".to_string());
+        let inferred_type = right_node.and_then(|child| self.infer_object_type(child));
+        let right = right_node
+            .map(|child| self.lower_expression(child))
+            .unwrap_or_else(|| self.lower_opaque(node));
+
+        if is_simple_variable_name(&target) {
+            if let Some(class_name) = inferred_type {
+                self.variable_types.insert(target.clone(), class_name);
+            } else {
+                self.variable_types.remove(&target);
+            }
+        }
 
         self.instructions.push(Instruction::Assignment {
             target,
@@ -324,7 +337,7 @@ impl<'a> PhpLowerer<'a> {
     }
 
     fn lower_call(&mut self, node: Node<'_>) -> ValueId {
-        let (target, call_kind) = call_target(node, self.source);
+        let (target, call_kind) = self.call_target(node);
         let arguments = node
             .child_by_field_name("arguments")
             .map(|arguments| {
@@ -350,6 +363,65 @@ impl<'a> PhpLowerer<'a> {
             location: source_location(node, self.path),
         });
         output
+    }
+
+    fn call_target(&self, node: Node<'_>) -> (String, CallKind) {
+        match node.kind() {
+            "function_call_expression" => {
+                let function = node.child_by_field_name("function");
+                let target = function
+                    .and_then(|child| node_text(child, self.source))
+                    .unwrap_or_else(|| "<dynamic>".to_string());
+                let kind = if function.is_some_and(|child| {
+                    matches!(child.kind(), "name" | "qualified_name" | "relative_name")
+                }) {
+                    CallKind::Function
+                } else {
+                    CallKind::Dynamic
+                };
+                (target, kind)
+            }
+            "member_call_expression" => (
+                self.receiver_aware_method_target(node),
+                CallKind::Method,
+            ),
+            "nullsafe_member_call_expression" => (
+                self.receiver_aware_method_target(node),
+                CallKind::NullsafeMethod,
+            ),
+            "scoped_call_expression" => (
+                node.child_by_field_name("name")
+                    .and_then(|child| node_text(child, self.source))
+                    .unwrap_or_else(|| "<dynamic>".to_string()),
+                CallKind::StaticMethod,
+            ),
+            _ => ("<dynamic>".to_string(), CallKind::Dynamic),
+        }
+    }
+
+    fn receiver_aware_method_target(&self, node: Node<'_>) -> String {
+        let method = node
+            .child_by_field_name("name")
+            .and_then(|child| node_text(child, self.source))
+            .unwrap_or_else(|| "<dynamic>".to_string());
+        let receiver_type = node
+            .child_by_field_name("object")
+            .and_then(|object| self.infer_object_type(object));
+
+        receiver_type
+            .map(|class_name| format!("{class_name}::{method}"))
+            .unwrap_or(method)
+    }
+
+    fn infer_object_type(&self, node: Node<'_>) -> Option<String> {
+        match node.kind() {
+            "object_creation_expression" => object_creation_class(node, self.source),
+            "variable_name" => node_text(node, self.source)
+                .and_then(|name| self.variable_types.get(&name).cloned()),
+            "parenthesized_expression" | "argument" => first_named_child(node)
+                .and_then(|child| self.infer_object_type(child)),
+            _ => None,
+        }
     }
 
     fn lower_opaque(&mut self, node: Node<'_>) -> ValueId {
@@ -383,42 +455,37 @@ fn parameter_names(parameters: Node<'_>, source: &[u8]) -> Vec<String> {
     names
 }
 
-fn call_target(node: Node<'_>, source: &[u8]) -> (String, CallKind) {
-    match node.kind() {
-        "function_call_expression" => {
-            let function = node.child_by_field_name("function");
-            let target = function
-                .and_then(|child| node_text(child, source))
-                .unwrap_or_else(|| "<dynamic>".to_string());
-            let kind = if function.is_some_and(|child| {
-                matches!(child.kind(), "name" | "qualified_name" | "relative_name")
-            }) {
-                CallKind::Function
-            } else {
-                CallKind::Dynamic
-            };
-            (target, kind)
-        }
-        "member_call_expression" => (
-            node.child_by_field_name("name")
-                .and_then(|child| node_text(child, source))
-                .unwrap_or_else(|| "<dynamic>".to_string()),
-            CallKind::Method,
-        ),
-        "nullsafe_member_call_expression" => (
-            node.child_by_field_name("name")
-                .and_then(|child| node_text(child, source))
-                .unwrap_or_else(|| "<dynamic>".to_string()),
-            CallKind::NullsafeMethod,
-        ),
-        "scoped_call_expression" => (
-            node.child_by_field_name("name")
-                .and_then(|child| node_text(child, source))
-                .unwrap_or_else(|| "<dynamic>".to_string()),
-            CallKind::StaticMethod,
-        ),
-        _ => ("<dynamic>".to_string(), CallKind::Dynamic),
+fn object_creation_class(node: Node<'_>, source: &[u8]) -> Option<String> {
+    let class_node = {
+        let mut cursor = node.walk();
+        node.named_children(&mut cursor)
+            .find(|child| matches!(child.kind(), "name" | "qualified_name" | "relative_name"))
+    }?;
+    node_text(class_node, source).and_then(|name| canonical_database_class(&name))
+}
+
+fn canonical_database_class(name: &str) -> Option<String> {
+    let normalized = name.trim().trim_start_matches('\\');
+    if normalized.contains('\\') {
+        return None;
     }
+    if normalized.eq_ignore_ascii_case("pdo") {
+        Some("PDO".to_string())
+    } else if normalized.eq_ignore_ascii_case("mysqli") {
+        Some("mysqli".to_string())
+    } else {
+        None
+    }
+}
+
+fn is_simple_variable_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix('$') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 fn operator_text(node: Node<'_>, source: &[u8]) -> Option<String> {
@@ -554,6 +621,85 @@ mod tests {
                     ..
                 } if values.len() == 1
             )
+        }));
+    }
+
+    #[test]
+    fn tags_pdo_method_calls_with_receiver_type() {
+        let output = lower("<?php $pdo = new PDO($dsn); $pdo->query($_GET['sql']);");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Method,
+                    ..
+                } if target == "PDO::query"
+            )
+        }));
+    }
+
+    #[test]
+    fn tags_mysqli_method_calls_through_alias() {
+        let output = lower("<?php $db = new mysqli(); $alias = $db; $alias->prepare($_POST['sql']);");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Method,
+                    ..
+                } if target == "mysqli::prepare"
+            )
+        }));
+    }
+
+    #[test]
+    fn tags_direct_object_creation_method_calls() {
+        let output = lower("<?php (new PDO($dsn))->exec($_GET['sql']);");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::Call { target, .. } if target == "PDO::exec")
+        }));
+    }
+
+    #[test]
+    fn does_not_tag_unrelated_query_methods() {
+        let output = lower("<?php $service = make_service(); $service->query($_GET['sql']);");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Method,
+                    ..
+                } if target == "query"
+            )
+        }));
+    }
+
+    #[test]
+    fn clears_receiver_type_after_reassignment() {
+        let output = lower("<?php $pdo = new PDO($dsn); $pdo = make_service(); $pdo->query($_GET['sql']);");
+        assert!(output.module.instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Call {
+                    target,
+                    call_kind: CallKind::Method,
+                    ..
+                } if target == "query"
+            )
+        }));
+        assert!(!output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::Call { target, .. } if target == "PDO::query")
+        }));
+    }
+
+    #[test]
+    fn does_not_treat_namespaced_user_class_as_pdo() {
+        let output = lower("<?php $pdo = new App\\PDO(); $pdo->query($_GET['sql']);");
+        assert!(!output.module.instructions.iter().any(|instruction| {
+            matches!(instruction, Instruction::Call { target, .. } if target == "PDO::query")
         }));
     }
 
