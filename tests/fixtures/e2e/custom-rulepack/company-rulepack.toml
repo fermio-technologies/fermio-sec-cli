@@ -1,0 +1,13 @@
+schema_version = 1
+id = "acme.release.policy"
+version = "1.0.0"
+
+[[rules]]
+id = "FERMIO-ACME-DEBUG-001"
+title = "Application debug helper"
+description = "Remove the organization debug helper from production code."
+severity = "medium"
+confidence = "high"
+cwe = "CWE-489"
+targets = ["acme_debug"]
+call_kinds = ["function"]
