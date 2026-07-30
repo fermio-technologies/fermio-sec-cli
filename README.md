@@ -16,6 +16,8 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
 - Versioned `.fermio.toml` configuration
+- Strict local declarative rulepacks
+- Framework-aware Laravel, Symfony and WordPress semantic profiles
 - PHP command, SQL and reflected-XSS taint analysis
 - Receiver-aware PDO and MySQLi SQL taint analysis
 - Limited same-file function return and sink summaries
@@ -42,7 +44,7 @@ cargo run -p fermio-cli -- rules
 
 Fermio automatically reads `.fermio.toml` from the scan root when the file exists. Use `--config <FILE>` to select another file or `--no-config` to disable configuration loading. An explicitly supplied CLI value takes precedence over the corresponding configured value.
 
-Configuration uses a versioned and strictly validated schema. Unknown fields, unsupported schema versions, invalid limits, conflicting rule selections and unknown rule identifiers stop the scan with exit code `2`.
+Configuration uses a versioned and strictly validated schema. Unknown fields, unsupported schema versions, invalid limits, conflicting rule selections, duplicate rulepack paths and unknown rule identifiers stop the scan with exit code `2`.
 
 ```toml
 schema_version = 1
@@ -59,14 +61,57 @@ baseline = ".fermio-baseline.json"
 enabled = [
   "FERMIO-PHP-TAINT-SQL-001",
   "FERMIO-PHP-TAINT-SQL-OO-001",
+  "FERMIO-WORDPRESS-AJAX-NOPRIV-001",
 ]
 disabled = []
 
 [rules.severity]
 "FERMIO-PHP-TAINT-SQL-OO-001" = "critical"
+
+[rulepacks]
+builtins = true
+paths = ["security/company-rulepack.toml"]
 ```
 
-Paths declared in the configuration, such as `scan.baseline`, are resolved relative to the configuration file. Rule severity overrides affect reports and the configured or command-line failure threshold, but do not change stable fingerprints or baseline compatibility. See [`fermio.example.toml`](fermio.example.toml) for a complete starting point.
+Paths declared in the configuration, including `scan.baseline` and `rulepacks.paths`, are resolved relative to the configuration file. Rule severity overrides affect reports and the configured or command-line failure threshold, but do not change stable fingerprints or baseline compatibility. See [`fermio.example.toml`](fermio.example.toml) for a complete starting point.
+
+## Declarative rulepacks
+
+Rulepacks are local TOML files with a versioned, closed schema. The first schema supports deterministic call rules with:
+
+- rule metadata, severity, confidence and optional CWE;
+- exact normalized call targets;
+- function, method, nullsafe-method, static-method or dynamic-call filters;
+- optional literal-string equality or prefix matching on one argument;
+- optional activation only when one of the declared frameworks is detected.
+
+Rulepacks cannot execute scripts, load dynamic libraries, use arbitrary regular expressions or request network access. Each file is limited to 1 MiB and 1,000 rules. Unknown fields, duplicate IDs, malformed CWE identifiers and invalid argument matchers fail closed.
+
+Example external rulepack:
+
+```toml
+schema_version = 1
+id = "acme.php.policy"
+version = "1.0.0"
+
+[[rules]]
+id = "FERMIO-ACME-DEBUG-001"
+title = "Application debug helper"
+description = "Remove the organization debug helper from production code."
+severity = "medium"
+confidence = "high"
+cwe = "CWE-489"
+targets = ["acme_debug"]
+call_kinds = ["function"]
+```
+
+The built-in framework rulepack currently includes:
+
+- Laravel `dd()` and static `raw()` database-expression review;
+- Symfony `dump()` and `Process::fromShellCommandline()` review;
+- WordPress unauthenticated `wp_ajax_nopriv_` registrations and direct `error_log()` review.
+
+Framework-restricted rules remain registered for configuration validation but emit findings only when their framework is detected. The initial static-method matcher records the method name rather than performing full class-resolution, so rules such as Laravel `raw()` intentionally use medium confidence.
 
 ## Command taint analysis
 
@@ -175,4 +220,4 @@ generated/**
 
 Default scan limits are 100,000 PHP files and 2 MiB per file. Oversized files are skipped with a diagnostic; exceeding the total file-count limit stops the scan.
 
-See [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) for the first-version design.
+See [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md) for the architecture and remaining release work.
