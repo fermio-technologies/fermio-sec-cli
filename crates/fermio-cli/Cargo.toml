@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+fermio-config = { path = "../fermio-config" }
 fermio-core = { path = "../fermio-core" }
 fermio-engine = { path = "../fermio-engine" }
 fermio-language-api = { path = "../fermio-language-api" }

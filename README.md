@@ -15,6 +15,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Terminal, JSON and SARIF 2.1.0 reports
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
+- Versioned `.fermio.toml` configuration
 - PHP command, SQL and reflected-XSS taint analysis
 - Receiver-aware PDO and MySQLi SQL taint analysis
 - Limited same-file function return and sink summaries
@@ -30,10 +31,42 @@ cargo run -p fermio-cli -- scan .
 cargo run -p fermio-cli -- scan . --format json
 cargo run -p fermio-cli -- scan . --format sarif --output fermio.sarif
 cargo run -p fermio-cli -- scan . --max-files 50000 --max-file-size 2097152
+cargo run -p fermio-cli -- scan . --config config/security.toml
+cargo run -p fermio-cli -- scan . --no-config
 cargo run -p fermio-cli -- languages
 cargo run -p fermio-cli -- frameworks
 cargo run -p fermio-cli -- rules
 ```
+
+## Configuration
+
+Fermio automatically reads `.fermio.toml` from the scan root when the file exists. Use `--config <FILE>` to select another file or `--no-config` to disable configuration loading. An explicitly supplied CLI value takes precedence over the corresponding configured value.
+
+Configuration uses a versioned and strictly validated schema. Unknown fields, unsupported schema versions, invalid limits, conflicting rule selections and unknown rule identifiers stop the scan with exit code `2`.
+
+```toml
+schema_version = 1
+
+[scan]
+include_vendor = false
+max_files = 100000
+max_file_size = 2097152
+fail_on = "high"
+baseline = ".fermio-baseline.json"
+
+[rules]
+# Omit `enabled` to run every registered rule.
+enabled = [
+  "FERMIO-PHP-TAINT-SQL-001",
+  "FERMIO-PHP-TAINT-SQL-OO-001",
+]
+disabled = []
+
+[rules.severity]
+"FERMIO-PHP-TAINT-SQL-OO-001" = "critical"
+```
+
+Paths declared in the configuration, such as `scan.baseline`, are resolved relative to the configuration file. Rule severity overrides affect reports and the configured or command-line failure threshold, but do not change stable fingerprints or baseline compatibility. See [`fermio.example.toml`](fermio.example.toml) for a complete starting point.
 
 ## Command taint analysis
 
