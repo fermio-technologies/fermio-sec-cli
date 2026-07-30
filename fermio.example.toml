@@ -1,0 +1,16 @@
+schema_version = 1
+
+[scan]
+include_vendor = false
+max_files = 100000
+max_file_size = 2097152
+fail_on = "high"
+baseline = ".fermio-baseline.json"
+
+[rules]
+# When omitted, every registered rule is enabled.
+# enabled = ["FERMIO-PHP-TAINT-SQL-001", "FERMIO-PHP-TAINT-SQL-OO-001"]
+disabled = []
+
+[rules.severity]
+# "FERMIO-PHP-CORE-CRYPTO-001" = "low"
