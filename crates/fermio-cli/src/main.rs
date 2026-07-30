@@ -4,7 +4,8 @@ use fermio_core::{FindingBaseline, Severity};
 use fermio_engine::{ScanEngine, ScanOptions};
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
-use fermio_rules::built_in_rules;
+use fermio_rules::{built_in_rules, Rule};
+use fermio_rules_php_oo::built_in_rules as built_in_php_oo_rules;
 use std::{
     fs,
     fs::File,
@@ -87,7 +88,7 @@ fn run() -> Result<()> {
             baseline,
             write_baseline,
         } => {
-            let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], built_in_rules());
+            let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], registered_rules());
             let mut result = engine.scan_with_options(
                 &path,
                 ScanOptions {
@@ -137,13 +138,19 @@ fn run() -> Result<()> {
             println!("wordpress\tenabled");
         }
         Command::Rules => {
-            for rule in built_in_rules() {
+            for rule in registered_rules() {
                 println!("{}", rule.id());
             }
         }
     }
 
     Ok(())
+}
+
+fn registered_rules() -> Vec<Box<dyn Rule>> {
+    let mut rules = built_in_rules();
+    rules.extend(built_in_php_oo_rules());
+    rules
 }
 
 fn read_baseline_file(path: &Path) -> Result<FindingBaseline> {
