@@ -18,6 +18,7 @@ fermio-engine = { path = "../fermio-engine" }
 fermio-language-api = { path = "../fermio-language-api" }
 fermio-language-php = { path = "../fermio-language-php" }
 fermio-report = { path = "../fermio-report" }
+fermio-rulepack = { path = "../fermio-rulepack" }
 fermio-rules = { path = "../fermio-rules" }
 fermio-rules-php-oo = { path = "../fermio-rules-php-oo" }
 serde_json.workspace = true
