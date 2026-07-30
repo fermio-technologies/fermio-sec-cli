@@ -27,6 +27,10 @@ All notable changes to `fermio-sec-cli` are documented in this file.
 - resource-limit and performance regression coverage
 - Linux, Windows and macOS release archives with SHA-256 checksums
 
+### Changed
+
+- project license switched from Apache-2.0 to AGPL-3.0-only
+
 ### Security
 
 - source code remains local by default

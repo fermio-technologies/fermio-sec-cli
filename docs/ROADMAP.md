@@ -18,7 +18,7 @@ The required local-first roadmap is complete for `0.1.0-rc.1`:
 - Laravel, Symfony and WordPress semantic profiles
 - vulnerable, safe and framework-specific end-to-end fixtures
 - file-count, file-size and performance regression coverage
-- Apache-2.0 release licensing and security policy
+- AGPL-3.0 release licensing and security policy
 - Linux, Windows and macOS packaging with SHA-256 checksums
 - release checklist, changelog and release-candidate versioning
 

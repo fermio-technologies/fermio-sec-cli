@@ -28,7 +28,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 
 ## Installation
 
-Tagged releases publish archives for Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon. Every archive includes a SHA-256 checksum, installation instructions, the changelog and the Apache-2.0 license.
+Tagged releases publish archives for Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon. Every archive includes a SHA-256 checksum, installation instructions, the changelog and the AGPL-3.0 license.
 
 See [`INSTALL.md`](INSTALL.md) for checksum verification, binary installation and source-build instructions.
 
@@ -229,5 +229,9 @@ Default scan limits are 100,000 PHP files and 2 MiB per file. Oversized files ar
 ## Release validation
 
 The CI release gate covers formatting, Clippy, unit and documentation tests, framework and taint fixtures, external rulepack loading, resource-limit regressions, and a 250-file performance smoke test. Tagged releases package four supported targets and publish SHA-256 checksums plus the dependency lockfile used by every build.
+
+## License
+
+`fermio-sec-cli` is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
 
 See [`CHANGELOG.md`](CHANGELOG.md), [`SECURITY.md`](SECURITY.md), [`docs/RELEASE.md`](docs/RELEASE.md), [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) and [`docs/ROADMAP.md`](docs/ROADMAP.md).
