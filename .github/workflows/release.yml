@@ -8,12 +8,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   lockfile:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify release tag and changelog
+        run: python3 scripts/verify_release_version.py --tag "${GITHUB_REF_NAME}"
 
       - name: Install Rust 1.88.0
         uses: dtolnay/rust-toolchain@stable
@@ -118,7 +125,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_flags=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --verify-tag \
             --generate-notes \
-            --title "${GITHUB_REF_NAME}"
+            --title "${GITHUB_REF_NAME}" \
+            "${release_flags[@]}"
