@@ -8,6 +8,7 @@ members = [
   "crates/fermio-language-api",
   "crates/fermio-language-php",
   "crates/fermio-ir",
+  "crates/fermio-rulepack",
   "crates/fermio-rules",
   "crates/fermio-rules-php-oo",
   "crates/fermio-report",
