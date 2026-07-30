@@ -1,10 +1,14 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use fermio_config::{load_for_root, FermioConfig};
+use fermio_config::{load_for_root, FermioConfig, LoadedConfig};
 use fermio_core::{FindingBaseline, ScanResult, Severity};
 use fermio_engine::{ScanEngine, ScanOptions};
+use fermio_language_api::LanguageFrontend;
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
+use fermio_rulepack::{
+    built_in_rules as built_in_rulepack_rules, load_rulepack_file,
+};
 use fermio_rules::{built_in_rules, Rule};
 use fermio_rules_php_oo::built_in_rules as built_in_php_oo_rules;
 use std::{
@@ -17,6 +21,7 @@ use std::{
 
 const DEFAULT_MAX_FILES: usize = 100_000;
 const DEFAULT_MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+const BUILTIN_FRAMEWORKS: &[&str] = &["laravel", "symfony", "wordpress"];
 
 #[derive(Debug, Parser)]
 #[command(
@@ -100,7 +105,10 @@ fn run() -> Result<()> {
             write_baseline,
         } => {
             let loaded_config = load_for_root(&path, config.as_deref(), no_config)?;
-            let configured_rules = select_rules(&loaded_config.config)?;
+            let frontend = PhpFrontend::new();
+            let detection = frontend.detect_project(&path)?;
+            let registered = registered_rules(&loaded_config, &detection.frameworks)?;
+            let configured_rules = select_rules(&loaded_config.config, registered)?;
             let scan_config = &loaded_config.config.scan;
 
             let include_vendor = include_vendor || scan_config.include_vendor.unwrap_or(false);
@@ -121,7 +129,7 @@ fn run() -> Result<()> {
                 baseline.or(configured_baseline)
             };
 
-            let engine = ScanEngine::new(vec![Box::new(PhpFrontend::new())], configured_rules);
+            let engine = ScanEngine::new(vec![Box::new(frontend)], configured_rules);
             let mut result = engine.scan_with_options(
                 &path,
                 ScanOptions {
@@ -173,7 +181,7 @@ fn run() -> Result<()> {
             println!("wordpress\tenabled");
         }
         Command::Rules => {
-            for rule in registered_rules() {
+            for rule in registered_builtin_rules()? {
                 println!("{}", rule.id());
             }
         }
@@ -182,14 +190,52 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn registered_rules() -> Vec<Box<dyn Rule>> {
+fn registered_rules(
+    loaded_config: &LoadedConfig,
+    frameworks: &[String],
+) -> Result<Vec<Box<dyn Rule>>> {
     let mut rules = built_in_rules();
     rules.extend(built_in_php_oo_rules());
-    rules
+
+    if loaded_config.config.rulepacks.builtins.unwrap_or(true) {
+        rules.extend(built_in_rulepack_rules(frameworks)?);
+    }
+
+    for configured_path in &loaded_config.config.rulepacks.paths {
+        let path = loaded_config.resolve_path(configured_path);
+        rules.extend(load_rulepack_file(&path, frameworks)?);
+    }
+
+    validate_unique_rule_ids(&rules)?;
+    Ok(rules)
 }
 
-fn select_rules(config: &FermioConfig) -> Result<Vec<Box<dyn Rule>>> {
-    let rules = registered_rules();
+fn registered_builtin_rules() -> Result<Vec<Box<dyn Rule>>> {
+    let mut rules = built_in_rules();
+    rules.extend(built_in_php_oo_rules());
+    let frameworks = BUILTIN_FRAMEWORKS
+        .iter()
+        .map(|framework| (*framework).to_string())
+        .collect::<Vec<_>>();
+    rules.extend(built_in_rulepack_rules(&frameworks)?);
+    validate_unique_rule_ids(&rules)?;
+    Ok(rules)
+}
+
+fn validate_unique_rule_ids(rules: &[Box<dyn Rule>]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for rule in rules {
+        if !seen.insert(rule.id()) {
+            bail!("duplicate registered rule id `{}`", rule.id());
+        }
+    }
+    Ok(())
+}
+
+fn select_rules(
+    config: &FermioConfig,
+    rules: Vec<Box<dyn Rule>>,
+) -> Result<Vec<Box<dyn Rule>>> {
     let known = rules
         .iter()
         .map(|rule| rule.id())
@@ -306,11 +352,21 @@ mod tests {
             "#,
         )
         .expect("configuration should parse");
-        let selected = select_rules(&config).expect("rule selection should succeed");
+        let selected = select_rules(&config, registered_builtin_rules().unwrap())
+            .expect("rule selection should succeed");
         let ids = selected.iter().map(|rule| rule.id()).collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains("FERMIO-PHP-CORE-EVAL-001"));
         assert!(ids.contains("FERMIO-PHP-TAINT-SQL-OO-001"));
+    }
+
+    #[test]
+    fn exposes_builtin_framework_rules() {
+        let rules = registered_builtin_rules().expect("built-in rules should load");
+        let ids = rules.iter().map(|rule| rule.id()).collect::<BTreeSet<_>>();
+        assert!(ids.contains("FERMIO-LARAVEL-DEBUG-DD-001"));
+        assert!(ids.contains("FERMIO-SYMFONY-PROCESS-SHELL-001"));
+        assert!(ids.contains("FERMIO-WORDPRESS-AJAX-NOPRIV-001"));
     }
 
     #[test]
@@ -322,7 +378,7 @@ mod tests {
             "#,
         )
         .expect("configuration syntax should parse");
-        let error = select_rules(&config)
+        let error = select_rules(&config, registered_builtin_rules().unwrap())
             .err()
             .expect("unknown rules must fail");
         assert!(error.to_string().contains("unknown rule"));
