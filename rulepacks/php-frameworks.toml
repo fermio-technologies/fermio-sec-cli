@@ -1,0 +1,70 @@
+schema_version = 1
+id = "fermio.php.frameworks"
+version = "1.0.0"
+
+[[rules]]
+id = "FERMIO-LARAVEL-DEBUG-DD-001"
+title = "Laravel debug termination in application code"
+description = "The Laravel dd() helper stops execution and can expose application data. Remove it from production paths or replace it with structured logging."
+severity = "medium"
+confidence = "high"
+cwe = "CWE-489"
+frameworks = ["laravel"]
+targets = ["dd"]
+call_kinds = ["function"]
+
+[[rules]]
+id = "FERMIO-LARAVEL-DB-RAW-001"
+title = "Laravel raw database expression"
+description = "A raw database expression bypasses query-builder escaping boundaries. Verify that the expression is constant or that all dynamic values are parameterized."
+severity = "medium"
+confidence = "medium"
+cwe = "CWE-89"
+frameworks = ["laravel"]
+targets = ["raw"]
+call_kinds = ["static_method"]
+
+[[rules]]
+id = "FERMIO-SYMFONY-DEBUG-DUMP-001"
+title = "Symfony debug output in application code"
+description = "The Symfony dump() helper can expose internal application data when it remains reachable in production code."
+severity = "low"
+confidence = "high"
+cwe = "CWE-489"
+frameworks = ["symfony"]
+targets = ["dump"]
+call_kinds = ["function"]
+
+[[rules]]
+id = "FERMIO-SYMFONY-PROCESS-SHELL-001"
+title = "Symfony shell command-line process"
+description = "Process::fromShellCommandline() invokes a command through a shell. Prefer argument-vector process construction and keep untrusted data outside the command string."
+severity = "high"
+confidence = "high"
+cwe = "CWE-78"
+frameworks = ["symfony"]
+targets = ["fromShellCommandline"]
+call_kinds = ["static_method"]
+
+[[rules]]
+id = "FERMIO-WORDPRESS-AJAX-NOPRIV-001"
+title = "Unauthenticated WordPress AJAX endpoint"
+description = "An action registered with the wp_ajax_nopriv_ prefix is reachable without an authenticated WordPress session. Verify nonce validation, authorization and input handling in the callback."
+severity = "medium"
+confidence = "high"
+cwe = "CWE-306"
+frameworks = ["wordpress"]
+targets = ["add_action"]
+call_kinds = ["function"]
+argument = { index = 0, string_prefix = "wp_ajax_nopriv_", case_sensitive = true }
+
+[[rules]]
+id = "FERMIO-WORDPRESS-DEBUG-LOG-001"
+title = "WordPress application data written to the PHP error log"
+description = "Direct error_log() usage in a WordPress project may disclose request, user or plugin data. Verify that logged values are non-sensitive and production logging is appropriately restricted."
+severity = "low"
+confidence = "medium"
+cwe = "CWE-532"
+frameworks = ["wordpress"]
+targets = ["error_log"]
+call_kinds = ["function"]
