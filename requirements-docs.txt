@@ -1,0 +1,5 @@
+# Dependências da documentação MkDocs (Fermio Sec CLI)
+# Uso: pip install -r requirements-docs.txt
+mkdocs-material>=9.5
+pymdown-extensions>=10.7
+mkdocs-static-i18n>=1.2

@@ -1,0 +1,101 @@
+site_name: Fermio Sec CLI
+site_description: Análise estática local-first para PHP — Laravel, Symfony e WordPress — sem executar o código da aplicação.
+site_url: https://fermio-technologies.github.io/fermio-sec-cli/
+repo_url: https://github.com/fermio-technologies/fermio-sec-cli
+repo_name: fermio-technologies/fermio-sec-cli
+edit_uri: edit/main/docs-site/
+docs_dir: docs-site
+copyright: Copyright &copy; Fermio Technologies — AGPL-3.0-only
+
+theme:
+  name: material
+  language: pt-BR
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle: { icon: material/weather-night, name: Modo escuro }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle: { icon: material/weather-sunny, name: Modo claro }
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - search.suggest
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: pt
+          default: true
+          name: Português
+          build: true
+        - locale: en
+          name: English
+          build: true
+          nav_translations:
+            Início: Home
+            Começando: Getting started
+            Escaneando: Scanning
+            Configuração: Configuration
+            Rulepacks: Rulepacks
+            Frameworks: Frameworks
+            Análise de taint: Taint analysis
+            Baselines & CI: Baselines & CI
+            Referência CLI: CLI reference
+            Modelo de segurança: Security model
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Início: index.md
+  - Começando: getting-started.md
+  - Escaneando: scanning.md
+  - Configuração: configuration.md
+  - Rulepacks: rulepacks.md
+  - Frameworks: frameworks.md
+  - Análise de taint: taint-analysis.md
+  - Baselines & CI: baselines.md
+  - Referência CLI: cli-reference.md
+  - Modelo de segurança: security-model.md

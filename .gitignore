@@ -1,6 +1,8 @@
 /target
+/site
 .idea/
 .vscode/
 *.sarif
 *.jsonl
 .fermio/
+.venv-docs/

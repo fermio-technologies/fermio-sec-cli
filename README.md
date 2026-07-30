@@ -2,6 +2,8 @@
 
 `fermio-sec-cli` is the local-first static analysis CLI from Fermio Technologies.
 
+**Documentation:** [https://fermio-technologies.github.io/fermio-sec-cli/](https://fermio-technologies.github.io/fermio-sec-cli/)
+
 The first release targets PHP and its main ecosystems. The core architecture remains language-neutral so future frontends can be added without rewriting the analysis engine.
 
 ## Initial scope
