@@ -93,5 +93,13 @@ jobs:
       - name: Run release end-to-end tests
         run: cargo test -p fermio-cli --test release_e2e --locked -- --test-threads=1
 
-      - name: Validate release packaging script
-        run: python3 -m py_compile scripts/package_release.py
+      - name: Smoke test release packaging
+        run: |
+          cargo build --locked -p fermio-cli
+          python3 scripts/package_release.py \
+            --binary target/debug/fermio-sec \
+            --target x86_64-unknown-linux-gnu \
+            --version ci \
+            --output-dir target/release-smoke
+          cd target/release-smoke
+          sha256sum -c *.sha256
