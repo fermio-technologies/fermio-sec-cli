@@ -17,6 +17,7 @@ pub struct FermioConfig {
     pub schema_version: u32,
     pub scan: ScanConfig,
     pub rules: RulesConfig,
+    pub rulepacks: RulepacksConfig,
 }
 
 impl Default for FermioConfig {
@@ -25,6 +26,7 @@ impl Default for FermioConfig {
             schema_version: CONFIG_SCHEMA_VERSION,
             scan: ScanConfig::default(),
             rules: RulesConfig::default(),
+            rulepacks: RulepacksConfig::default(),
         }
     }
 }
@@ -45,6 +47,13 @@ pub struct RulesConfig {
     pub enabled: Option<Vec<String>>,
     pub disabled: Vec<String>,
     pub severity: BTreeMap<String, Severity>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RulepacksConfig {
+    pub builtins: Option<bool>,
+    pub paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +160,7 @@ fn validate(config: &FermioConfig) -> Result<()> {
         }
     }
 
+    validate_rulepack_paths(&config.rulepacks.paths)?;
     Ok(())
 }
 
@@ -167,6 +177,22 @@ fn validate_rule_list(name: &str, values: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn validate_rulepack_paths(paths: &[PathBuf]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for path in paths {
+        if path.as_os_str().is_empty() {
+            bail!("rulepacks.paths contains an empty path");
+        }
+        if !seen.insert(path) {
+            bail!(
+                "rulepacks.paths contains duplicate path `{}`",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 const fn default_schema_version() -> u32 {
     CONFIG_SCHEMA_VERSION
 }
@@ -176,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_scan_and_rule_configuration() {
+    fn parses_scan_rule_and_rulepack_configuration() {
         let config = parse(
             r#"
                 schema_version = 1
@@ -194,6 +220,10 @@ mod tests {
 
                 [rules.severity]
                 RULE-A = "critical"
+
+                [rulepacks]
+                builtins = false
+                paths = ["security/company.toml"]
             "#,
         )
         .expect("configuration should parse");
@@ -204,6 +234,11 @@ mod tests {
         assert_eq!(
             config.rules.severity.get("RULE-A"),
             Some(&Severity::Critical)
+        );
+        assert_eq!(config.rulepacks.builtins, Some(false));
+        assert_eq!(
+            config.rulepacks.paths,
+            vec![PathBuf::from("security/company.toml")]
         );
     }
 
@@ -232,6 +267,18 @@ mod tests {
         )
         .expect_err("conflicting selection must fail");
         assert!(error.to_string().contains("both enabled and disabled"));
+    }
+
+    #[test]
+    fn rejects_duplicate_rulepack_paths() {
+        let error = parse(
+            r#"
+                [rulepacks]
+                paths = ["security.toml", "security.toml"]
+            "#,
+        )
+        .expect_err("duplicate paths must fail");
+        assert!(error.to_string().contains("duplicate path"));
     }
 
     #[test]
