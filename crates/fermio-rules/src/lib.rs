@@ -619,7 +619,10 @@ fn create_sink_event(
     sink: SinkKind,
     location: &SourceLocation,
 ) -> Option<SinkEvent> {
-    let fact = fact?.is_active_for(domain).then(|| fact?.clone())?;
+    let fact = fact?;
+    if !fact.is_active_for(domain) {
+        return None;
+    }
     let fact = fact.propagated(sink.trace_label(), location);
     Some(SinkEvent {
         domain,
@@ -1326,7 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_sql_sink_inside_helper_with_argument_position() {
+    fn reports_sql_and_html_sinks_inside_helpers() {
         let instructions = vec![
             function_start("run_query", &["$connection", "$query"], 1),
             parameter_read(10, "$connection", 2),
@@ -1338,53 +1341,42 @@ mod tests {
                 2,
             ),
             function_end("run_query", 3),
+            function_start("render", &["$value"], 4),
+            parameter_read(13, "$value", 5),
+            output(OutputKind::Echo, vec![ValueId(13)], 5),
+            function_end("render", 6),
             Instruction::VariableRead {
                 output: ValueId(0),
                 name: "$_POST".to_string(),
-                location: location(4),
+                location: location(7),
             },
             Instruction::IndexRead {
                 output: ValueId(1),
                 collection: ValueId(0),
                 index: None,
-                location: location(4),
+                location: location(7),
             },
-            literal(2, "'connection'", 4),
+            literal(2, "'connection'", 7),
             call(
                 3,
                 "run_query",
                 vec![ValueId(2), ValueId(1)],
-                5,
+                8,
             ),
+            call(4, "render", vec![ValueId(1)], 9),
         ];
         let module = ModuleIr {
             language: "php".to_string(),
             path: "src/example.php".to_string(),
             instructions,
         };
-        let findings = TaintedSqlRule.evaluate(&ModuleAnalysis::new(&module));
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].location.start_line, 5);
-    }
-
-    #[test]
-    fn reports_html_sink_inside_helper() {
-        let mut instructions = vec![
-            function_start("render", &["$value"], 1),
-            parameter_read(10, "$value", 2),
-            output(OutputKind::Echo, vec![ValueId(10)], 2),
-            function_end("render", 3),
-        ];
-        instructions.extend(tainted_input("$_COOKIE"));
-        instructions.push(call(2, "render", vec![ValueId(1)], 5));
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        let findings = TaintedHtmlOutputRule.evaluate(&ModuleAnalysis::new(&module));
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].location.start_line, 5);
+        let analysis = ModuleAnalysis::new(&module);
+        let sql = TaintedSqlRule.evaluate(&analysis);
+        let html = TaintedHtmlOutputRule.evaluate(&analysis);
+        assert_eq!(sql.len(), 1);
+        assert_eq!(sql[0].location.start_line, 8);
+        assert_eq!(html.len(), 1);
+        assert_eq!(html[0].location.start_line, 9);
     }
 
     #[test]
@@ -1419,28 +1411,49 @@ mod tests {
     }
 
     #[test]
-    fn sanitizer_inside_helper_prevents_matching_sink_summary() {
-        let mut instructions = vec![
+    fn sanitizers_prevent_only_their_matching_sink_domain() {
+        let mut command = vec![
             function_start("safe_command", &["$value"], 1),
             parameter_read(10, "$value", 2),
             call(11, "escapeshellarg", vec![ValueId(10)], 2),
             call(12, "system", vec![ValueId(11)], 2),
             function_end("safe_command", 3),
         ];
-        instructions.extend(tainted_input("$_GET"));
-        instructions.push(call(2, "safe_command", vec![ValueId(1)], 5));
-        let module = ModuleIr {
+        command.extend(tainted_input("$_GET"));
+        command.push(call(2, "safe_command", vec![ValueId(1)], 5));
+        let command_module = ModuleIr {
             language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
+            path: "src/command.php".to_string(),
+            instructions: command,
         };
         assert!(TaintedCommandRule
-            .evaluate(&ModuleAnalysis::new(&module))
+            .evaluate(&ModuleAnalysis::new(&command_module))
             .is_empty());
+
+        let mut html = vec![
+            function_start("render", &["$value"], 1),
+            parameter_read(10, "$value", 2),
+            output(OutputKind::Echo, vec![ValueId(10)], 2),
+            function_end("render", 3),
+        ];
+        html.extend(tainted_input("$_GET"));
+        html.push(call(2, "escapeshellarg", vec![ValueId(1)], 4));
+        html.push(call(3, "render", vec![ValueId(2)], 5));
+        let html_module = ModuleIr {
+            language: "php".to_string(),
+            path: "src/html.php".to_string(),
+            instructions: html,
+        };
+        assert_eq!(
+            TaintedHtmlOutputRule
+                .evaluate(&ModuleAnalysis::new(&html_module))
+                .len(),
+            1
+        );
     }
 
     #[test]
-    fn sanitizer_before_helper_prevents_matching_sink_summary() {
+    fn sanitizer_before_helper_prevents_sink_summary() {
         let mut instructions = vec![
             function_start("run_command", &["$value"], 1),
             parameter_read(10, "$value", 2),
@@ -1458,30 +1471,6 @@ mod tests {
         assert!(TaintedCommandRule
             .evaluate(&ModuleAnalysis::new(&module))
             .is_empty());
-    }
-
-    #[test]
-    fn sanitizer_domains_remain_isolated_through_sink_summaries() {
-        let mut instructions = vec![
-            function_start("render", &["$value"], 1),
-            parameter_read(10, "$value", 2),
-            output(OutputKind::Echo, vec![ValueId(10)], 2),
-            function_end("render", 3),
-        ];
-        instructions.extend(tainted_input("$_GET"));
-        instructions.push(call(2, "escapeshellarg", vec![ValueId(1)], 4));
-        instructions.push(call(3, "render", vec![ValueId(2)], 5));
-        let module = ModuleIr {
-            language: "php".to_string(),
-            path: "src/example.php".to_string(),
-            instructions,
-        };
-        assert_eq!(
-            TaintedHtmlOutputRule
-                .evaluate(&ModuleAnalysis::new(&module))
-                .len(),
-            1
-        );
     }
 
     #[test]
