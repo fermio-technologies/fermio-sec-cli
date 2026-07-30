@@ -1,0 +1,15 @@
+[package]
+name = "fermio-rulepack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+fermio-core = { path = "../fermio-core" }
+fermio-ir = { path = "../fermio-ir" }
+fermio-rules = { path = "../fermio-rules" }
+serde.workspace = true
+sha2.workspace = true
+toml.workspace = true
