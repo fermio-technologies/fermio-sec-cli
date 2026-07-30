@@ -14,3 +14,10 @@ disabled = []
 
 [rules.severity]
 # "FERMIO-PHP-CORE-CRYPTO-001" = "low"
+
+[rulepacks]
+# Built-in Laravel, Symfony and WordPress profiles are enabled by default.
+builtins = true
+# Paths are resolved relative to this configuration file.
+paths = []
+# paths = ["security/company-rulepack.toml"]
