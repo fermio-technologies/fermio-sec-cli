@@ -251,9 +251,10 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_schema_versions() {
-        let error = parse("schema_version = 2")
-            .expect_err("unsupported schema versions must fail");
-        assert!(error.to_string().contains("unsupported configuration schema"));
+        let error = parse("schema_version = 2").expect_err("unsupported schema versions must fail");
+        assert!(error
+            .to_string()
+            .contains("unsupported configuration schema"));
     }
 
     #[test]

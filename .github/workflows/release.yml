@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  lockfile:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -27,19 +27,11 @@ jobs:
         with:
           toolchain: 1.88.0
 
-      - name: Generate dependency lockfile
-        run: cargo generate-lockfile
-
-      - name: Upload release lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-cargo-lock
-          path: Cargo.lock
-          if-no-files-found: error
-          retention-days: 7
+      - name: Validate locked workspace metadata
+        run: cargo metadata --locked --no-deps --format-version 1
 
   build:
-    needs: lockfile
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +52,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Download release lockfile
-        uses: actions/download-artifact@v4
-        with:
-          name: release-cargo-lock
-          path: .
 
       - name: Install Rust 1.88.0
         uses: dtolnay/rust-toolchain@stable
@@ -113,15 +99,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Download release lockfile
-        uses: actions/download-artifact@v4
-        with:
-          name: release-cargo-lock
-          path: release-lock
-
       - name: Add release lockfile and checksum
         run: |
-          cp release-lock/Cargo.lock "dist/fermio-sec-${GITHUB_REF_NAME}-Cargo.lock"
+          cp Cargo.lock "dist/fermio-sec-${GITHUB_REF_NAME}-Cargo.lock"
           cd dist
           sha256sum "fermio-sec-${GITHUB_REF_NAME}-Cargo.lock" > "fermio-sec-${GITHUB_REF_NAME}-Cargo.lock.sha256"
 

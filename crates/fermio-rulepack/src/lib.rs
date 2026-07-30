@@ -4,18 +4,13 @@ use fermio_ir::{CallKind, Instruction, ValueId};
 use fermio_rules::{ModuleAnalysis, Rule};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeSet,
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeSet, fs, path::Path};
 
 pub const RULEPACK_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RULEPACK_BYTES: u64 = 1024 * 1024;
 pub const MAX_RULES_PER_PACK: usize = 1_000;
 
-const BUILTIN_FRAMEWORK_RULEPACK: &str =
-    include_str!("../../../rulepacks/php-frameworks.toml");
+const BUILTIN_FRAMEWORK_RULEPACK: &str = include_str!("../../../rulepacks/php-frameworks.toml");
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,7 +74,9 @@ impl ArgumentMatcher {
     fn matches(&self, actual: &str) -> bool {
         let case_sensitive = self.case_sensitive.unwrap_or(true);
         if let Some(expected) = &self.string_equals {
-            return compare(actual, expected, case_sensitive, |left, right| left == right);
+            return compare(actual, expected, case_sensitive, |left, right| {
+                left == right
+            });
         }
         if let Some(prefix) = &self.string_prefix {
             return compare(actual, prefix, case_sensitive, |left, right| {
@@ -99,10 +96,7 @@ fn compare(
     if case_sensitive {
         operation(actual, expected)
     } else {
-        operation(
-            &actual.to_ascii_lowercase(),
-            &expected.to_ascii_lowercase(),
-        )
+        operation(&actual.to_ascii_lowercase(), &expected.to_ascii_lowercase())
     }
 }
 
@@ -204,10 +198,7 @@ pub fn built_in_rules(active_frameworks: &[String]) -> Result<Vec<Box<dyn Rule>>
         .context("invalid built-in PHP framework rulepack")
 }
 
-pub fn load_rulepack_file(
-    path: &Path,
-    active_frameworks: &[String],
-) -> Result<Vec<Box<dyn Rule>>> {
+pub fn load_rulepack_file(path: &Path, active_frameworks: &[String]) -> Result<Vec<Box<dyn Rule>>> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to inspect rulepack {}", path.display()))?;
     if metadata.len() > MAX_RULEPACK_BYTES {
@@ -224,10 +215,7 @@ pub fn load_rulepack_file(
         .with_context(|| format!("invalid rulepack {}", path.display()))
 }
 
-pub fn parse_rulepack(
-    content: &str,
-    active_frameworks: &[String],
-) -> Result<Vec<Box<dyn Rule>>> {
+pub fn parse_rulepack(content: &str, active_frameworks: &[String]) -> Result<Vec<Box<dyn Rule>>> {
     let pack: RulepackDefinition = toml::from_str(content).context("invalid rulepack TOML")?;
     validate_rulepack(&pack)?;
 
@@ -238,10 +226,7 @@ pub fn parse_rulepack(
         .collect())
 }
 
-fn instantiate_rule(
-    rule: RuleDefinition,
-    active_frameworks: &[String],
-) -> Box<dyn Rule> {
+fn instantiate_rule(rule: RuleDefinition, active_frameworks: &[String]) -> Box<dyn Rule> {
     let active = rule.frameworks.is_empty()
         || rule.frameworks.iter().any(|required| {
             active_frameworks
@@ -388,9 +373,9 @@ fn is_valid_rule_id(value: &str) -> bool {
 }
 
 fn is_valid_cwe(value: &str) -> bool {
-    value
-        .strip_prefix("CWE-")
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()))
+    value.strip_prefix("CWE-").is_some_and(|digits| {
+        !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 fn default_call_kinds() -> Vec<RuleCallKind> {
@@ -398,10 +383,7 @@ fn default_call_kinds() -> Vec<RuleCallKind> {
 }
 
 fn normalize_target(target: &str) -> String {
-    target
-        .trim()
-        .trim_start_matches('\\')
-        .to_ascii_lowercase()
+    target.trim().trim_start_matches('\\').to_ascii_lowercase()
 }
 
 fn fingerprint(rule_id: &str, semantic_target: &str, location: &SourceLocation) -> String {

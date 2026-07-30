@@ -6,9 +6,7 @@ use fermio_engine::{ScanEngine, ScanOptions};
 use fermio_language_api::LanguageFrontend;
 use fermio_language_php::PhpFrontend;
 use fermio_report::{write_report, OutputFormat};
-use fermio_rulepack::{
-    built_in_rules as built_in_rulepack_rules, load_rulepack_file,
-};
+use fermio_rulepack::{built_in_rules as built_in_rulepack_rules, load_rulepack_file};
 use fermio_rules::{built_in_rules, Rule};
 use fermio_rules_php_oo::built_in_rules as built_in_php_oo_rules;
 use std::{
@@ -232,14 +230,8 @@ fn validate_unique_rule_ids(rules: &[Box<dyn Rule>]) -> Result<()> {
     Ok(())
 }
 
-fn select_rules(
-    config: &FermioConfig,
-    rules: Vec<Box<dyn Rule>>,
-) -> Result<Vec<Box<dyn Rule>>> {
-    let known = rules
-        .iter()
-        .map(|rule| rule.id())
-        .collect::<BTreeSet<_>>();
+fn select_rules(config: &FermioConfig, rules: Vec<Box<dyn Rule>>) -> Result<Vec<Box<dyn Rule>>> {
+    let known = rules.iter().map(|rule| rule.id()).collect::<BTreeSet<_>>();
 
     let mut referenced = Vec::new();
     if let Some(enabled) = &config.rules.enabled {
@@ -254,12 +246,11 @@ fn select_rules(
         }
     }
 
-    let enabled = config.rules.enabled.as_ref().map(|values| {
-        values
-            .iter()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>()
-    });
+    let enabled = config
+        .rules
+        .enabled
+        .as_ref()
+        .map(|values| values.iter().map(String::as_str).collect::<BTreeSet<_>>());
     let disabled = config
         .rules
         .disabled
@@ -343,7 +334,10 @@ mod tests {
                 disabled = ["FERMIO-PHP-CORE-EVAL-001"]
             "#,
         );
-        assert!(config.is_err(), "conflicting rule selection should fail early");
+        assert!(
+            config.is_err(),
+            "conflicting rule selection should fail early"
+        );
 
         let config = parse(
             r#"
@@ -354,7 +348,10 @@ mod tests {
         .expect("configuration should parse");
         let selected = select_rules(&config, registered_builtin_rules().unwrap())
             .expect("rule selection should succeed");
-        let ids = selected.iter().map(|rule| rule.id()).collect::<BTreeSet<_>>();
+        let ids = selected
+            .iter()
+            .map(|rule| rule.id())
+            .collect::<BTreeSet<_>>();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains("FERMIO-PHP-CORE-EVAL-001"));
         assert!(ids.contains("FERMIO-PHP-TAINT-SQL-OO-001"));
@@ -416,10 +413,8 @@ mod tests {
                 dataflow: Vec::new(),
             }],
         };
-        let overrides = BTreeMap::from([(
-            "FERMIO-PHP-CORE-EVAL-001".to_string(),
-            Severity::Critical,
-        )]);
+        let overrides =
+            BTreeMap::from([("FERMIO-PHP-CORE-EVAL-001".to_string(), Severity::Critical)]);
 
         apply_severity_overrides(&mut result, &overrides);
         assert_eq!(result.findings[0].severity, Severity::Critical);

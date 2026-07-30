@@ -31,12 +31,12 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`.
 
 The workflow:
 
-1. generates one dependency lockfile;
-2. shares that lockfile across every build target;
-3. builds Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon binaries;
+1. verifies that the tag matches `Cargo.toml` and `CHANGELOG.md`;
+2. validates the versioned `Cargo.lock` with `cargo metadata --locked`;
+3. builds Linux x86_64, Windows x86_64, macOS Intel and macOS Apple Silicon binaries with `--locked`;
 4. packages the executable with release documentation and the Apache-2.0 license;
 5. creates SHA-256 checksum files;
-6. publishes the dependency lockfile and its checksum;
+6. publishes a copy of the versioned dependency lockfile and its checksum;
 7. creates the GitHub release from the existing tag.
 
 ## Post-publication verification

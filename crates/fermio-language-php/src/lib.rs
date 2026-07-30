@@ -179,17 +179,15 @@ impl<'a> PhpLowerer<'a> {
         }
         self.variable_types = outer_types;
 
-        self.instructions.push(Instruction::FunctionEnd {
-            name,
-            location,
-        });
+        self.instructions
+            .push(Instruction::FunctionEnd { name, location });
     }
 
     fn lower_echo(&mut self, node: Node<'_>) {
         let mut values = Vec::new();
         let mut cursor = node.walk();
         for expression in node.named_children(&mut cursor) {
-            values.push(self.lower_expression(expression));
+            self.collect_echo_values(expression, &mut values);
         }
         self.instructions.push(Instruction::Output {
             output: None,
@@ -197,6 +195,17 @@ impl<'a> PhpLowerer<'a> {
             values,
             location: source_location(node, self.path),
         });
+    }
+
+    fn collect_echo_values(&mut self, node: Node<'_>, values: &mut Vec<ValueId>) {
+        if node.kind() == "sequence_expression" {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                self.collect_echo_values(child, values);
+            }
+            return;
+        }
+        values.push(self.lower_expression(node));
     }
 
     fn lower_print(&mut self, node: Node<'_>) -> ValueId {
@@ -381,10 +390,7 @@ impl<'a> PhpLowerer<'a> {
                 };
                 (target, kind)
             }
-            "member_call_expression" => (
-                self.receiver_aware_method_target(node),
-                CallKind::Method,
-            ),
+            "member_call_expression" => (self.receiver_aware_method_target(node), CallKind::Method),
             "nullsafe_member_call_expression" => (
                 self.receiver_aware_method_target(node),
                 CallKind::NullsafeMethod,
@@ -418,8 +424,9 @@ impl<'a> PhpLowerer<'a> {
             "object_creation_expression" => object_creation_class(node, self.source),
             "variable_name" => node_text(node, self.source)
                 .and_then(|name| self.variable_types.get(&name).cloned()),
-            "parenthesized_expression" | "argument" => first_named_child(node)
-                .and_then(|child| self.infer_object_type(child)),
+            "parenthesized_expression" | "argument" => {
+                first_named_child(node).and_then(|child| self.infer_object_type(child))
+            }
             _ => None,
         }
     }
@@ -456,12 +463,13 @@ fn parameter_names(parameters: Node<'_>, source: &[u8]) -> Vec<String> {
 }
 
 fn object_creation_class(node: Node<'_>, source: &[u8]) -> Option<String> {
-    let class_node = {
-        let mut cursor = node.walk();
-        node.named_children(&mut cursor)
-            .find(|child| matches!(child.kind(), "name" | "qualified_name" | "relative_name"))
-    }?;
-    node_text(class_node, source).and_then(|name| canonical_database_class(&name))
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if matches!(child.kind(), "name" | "qualified_name" | "relative_name") {
+            return node_text(child, source).and_then(|name| canonical_database_class(&name));
+        }
+    }
+    None
 }
 
 fn canonical_database_class(name: &str) -> Option<String> {
@@ -641,7 +649,8 @@ mod tests {
 
     #[test]
     fn tags_mysqli_method_calls_through_alias() {
-        let output = lower("<?php $db = new mysqli(); $alias = $db; $alias->prepare($_POST['sql']);");
+        let output =
+            lower("<?php $db = new mysqli(); $alias = $db; $alias->prepare($_POST['sql']);");
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(
                 instruction,
@@ -679,7 +688,8 @@ mod tests {
 
     #[test]
     fn clears_receiver_type_after_reassignment() {
-        let output = lower("<?php $pdo = new PDO($dsn); $pdo = make_service(); $pdo->query($_GET['sql']);");
+        let output =
+            lower("<?php $pdo = new PDO($dsn); $pdo = make_service(); $pdo->query($_GET['sql']);");
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(
                 instruction,
@@ -705,7 +715,8 @@ mod tests {
 
     #[test]
     fn lowers_named_function_boundaries_and_parameters() {
-        let output = lower("<?php function passthrough($value, $suffix = '') { return $value . $suffix; }");
+        let output =
+            lower("<?php function passthrough($value, $suffix = '') { return $value . $suffix; }");
 
         assert!(output.module.instructions.iter().any(|instruction| {
             matches!(instruction, Instruction::FunctionStart { name, parameters, .. } if name == "passthrough" && parameters == &["$value", "$suffix"])

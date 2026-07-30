@@ -63,10 +63,7 @@ fn scans_framework_profiles_end_to_end() {
         (
             "laravel",
             "laravel",
-            [
-                "FERMIO-LARAVEL-DEBUG-DD-001",
-                "FERMIO-LARAVEL-DB-RAW-001",
-            ],
+            ["FERMIO-LARAVEL-DEBUG-DD-001", "FERMIO-LARAVEL-DB-RAW-001"],
         ),
         (
             "symfony",
