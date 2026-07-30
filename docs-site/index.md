@@ -39,11 +39,13 @@ flowchart LR
 
 ## Instalação rápida
 
-=== "curl | sh"
+=== "Binário (recomendado)"
 
     ```bash
     curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
     ```
+
+    Sem Rust. A pipeline de release publica o executável; o script baixa e valida o SHA-256.
 
 === "Release manual"
 
@@ -55,9 +57,10 @@ flowchart LR
     fermio-sec --version
     ```
 
-=== "Source"
+=== "Código (opcional)"
 
     ```bash
+    # Só para desenvolvimento / contribuição — requer Rust 1.88.0
     cargo build --locked --release -p fermio-cli
     ./target/release/fermio-sec --version
     ```

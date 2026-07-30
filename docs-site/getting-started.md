@@ -1,21 +1,21 @@
 # Começando
 
 !!! info "O que esta página cobre"
-    Pré-requisitos, instalação a partir de release ou código-fonte, verificação do binário e o primeiro `fermio-sec scan`.
+    Instalação pelo **binário pré-compilado** (caminho principal), download manual do release, opção de build a partir do código, e o primeiro `fermio-sec scan`.
 
 ## Pré-requisitos
 
 - Sistema suportado: Linux x86_64, Windows x86_64, macOS Intel ou Apple Silicon.
-- Para build a partir do código: **Rust 1.88.0** (ver `rust-toolchain.toml`).
 - Um projeto PHP local para escanear (Composer opcional; WordPress também é detectado por layout).
+- **Rust não é necessário** para instalar pelo binário. Só é exigido se você for [compilar a partir do código](#build-a-partir-do-código-opcional).
 
-## Instalação one-line
+## Instalação one-line (recomendado)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
 ```
 
-O script detecta o OS/arch, baixa o archive do GitHub Releases, valida o SHA-256 e instala em `~/.local/bin` (ajustando o PATH se necessário).
+O script detecta o OS/arch, baixa o archive do GitHub Releases, valida o SHA-256 e instala em `~/.local/bin` (ajustando o PATH se necessário). Não precisa de Rust.
 
 ```bash
 # Versão específica
@@ -76,7 +76,9 @@ Cada archive inclui `fermio-sec`, `README.md`, `INSTALL.md`, `CHANGELOG.md` e `L
     fermio-sec.exe --version
     ```
 
-## Build a partir do código
+## Build a partir do código (opcional)
+
+Só para desenvolvimento ou contribuição. Para uso normal, prefira o instalador one-line. Requer **Rust 1.88.0**.
 
 ```bash
 git clone https://github.com/fermio-technologies/fermio-sec-cli.git

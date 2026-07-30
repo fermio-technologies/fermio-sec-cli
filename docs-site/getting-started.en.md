@@ -1,21 +1,21 @@
 # Getting started
 
 !!! info "What this page covers"
-    Prerequisites, install from release or source, binary verification, and the first `fermio-sec scan`.
+    Install via the **prebuilt binary** (recommended path), manual release download, optional source build, and the first `fermio-sec scan`.
 
 ## Prerequisites
 
 - Supported OS: Linux x86_64, Windows x86_64, macOS Intel or Apple Silicon.
-- For source builds: **Rust 1.88.0** (see `rust-toolchain.toml`).
 - A local PHP project to scan (Composer optional; WordPress is also detected by layout).
+- **Rust is not required** for binary installs. It is only needed if you [build from source](#build-from-source-optional).
 
-## One-line install
+## One-line install (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
 ```
 
-The script detects OS/arch, downloads the GitHub Release archive, verifies SHA-256, and installs into `~/.local/bin` (updating PATH when needed).
+The script detects OS/arch, downloads the GitHub Release archive, verifies SHA-256, and installs into `~/.local/bin` (updating PATH when needed). No Rust required.
 
 ```bash
 # Specific version
@@ -76,7 +76,9 @@ Each archive includes `fermio-sec`, `README.md`, `INSTALL.md`, `CHANGELOG.md` an
     fermio-sec.exe --version
     ```
 
-## Build from source
+## Build from source (optional)
+
+For development or contribution only. For normal installs, prefer the one-line installer. Requires **Rust 1.88.0**.
 
 ```bash
 git clone https://github.com/fermio-technologies/fermio-sec-cli.git

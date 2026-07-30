@@ -1,6 +1,8 @@
 # Install Fermio Sec CLI
 
-## One-line install (Linux / macOS)
+**Recommended path: prebuilt binary.** You do not need Rust or `cargo build` to install and run `fermio-sec`. Release tags publish signed checksum archives for Linux, Windows and macOS; the one-line installer downloads and verifies them.
+
+## One-line install (Linux / macOS) — recommended
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fermio-technologies/fermio-sec-cli/main/scripts/install.sh | sh
@@ -79,7 +81,9 @@ Expand-Archive fermio-sec-*.zip -DestinationPath .
 fermio-sec.exe --version
 ```
 
-## Build from source
+## Build from source (optional)
+
+Use this only for development or contribution. For normal installs, prefer the one-line installer or a release archive above.
 
 Rust `1.88.0` is the supported toolchain for this release candidate.
 

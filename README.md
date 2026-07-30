@@ -21,7 +21,8 @@
 [**Recursos**](#-recursos) ·
 [**Configuração**](#-configuração) ·
 [**CI & baseline**](#-ci--baseline) ·
-[**Docs**](#-documentação)
+[**Docs**](#-documentação) ·
+[**Código-fonte**](#-instalar-a-partir-do-código-opcional)
 
 </div>
 
@@ -29,7 +30,7 @@
 
 ## ⚡ Quickstart em 2 minutos
 
-### Opção 1 — Instalador one-line (recomendado)
+**Caminho principal: binário pré-compilado.** Não precisa de Rust nem `cargo build` — a pipeline de release já gera os executáveis; o instalador só baixa e verifica o checksum.
 
 ```bash
 # 1. Instale o binário (Linux / macOS)
@@ -49,16 +50,9 @@ fermio-sec scan . --format sarif --output fermio.sarif --fail-on high
 >   | sh -s -- --version v0.1.0-rc.1
 > ```
 >
-> **Windows?** Baixe o `.zip` em [Releases](https://github.com/fermio-technologies/fermio-sec-cli/releases) e siga o [`INSTALL.md`](INSTALL.md).
-
-### Opção 2 — Build a partir do código
-
-```bash
-git clone https://github.com/fermio-technologies/fermio-sec-cli.git
-cd fermio-sec-cli
-cargo build --locked --release -p fermio-cli
-./target/release/fermio-sec scan .
-```
+> **Windows?** Baixe o `.zip` em [Releases](https://github.com/fermio-technologies/fermio-sec-cli/releases/tag/v0.1.0-rc.1).
+>
+> **Como o binário é gerado?** Push de uma tag `v*` → `.github/workflows/release.yml` compila Linux / Windows / macOS, empacota, gera `.sha256` e publica o [GitHub Release](https://github.com/fermio-technologies/fermio-sec-cli/releases).
 
 Pronto. Você está usando Fermio.
 
@@ -207,6 +201,19 @@ Mais em [Modelo de segurança](https://fermio-technologies.github.io/fermio-sec-
 | **Changelog** | [`CHANGELOG.md`](CHANGELOG.md) |
 | **Release** | [`docs/RELEASE.md`](docs/RELEASE.md) |
 | **Design / roadmap** | [`docs/DESIGN-v0.1.md`](docs/DESIGN-v0.1.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+
+---
+
+## 🛠️ Instalar a partir do código (opcional)
+
+Para **uso normal**, prefira o [binário pré-compilado](#-quickstart-em-2-minutos). Build a partir do código é útil para desenvolvimento e contribuição e requer **Rust 1.88.0**.
+
+```bash
+git clone https://github.com/fermio-technologies/fermio-sec-cli.git
+cd fermio-sec-cli
+cargo build --locked --release -p fermio-cli
+./target/release/fermio-sec --version
+```
 
 ---
 
