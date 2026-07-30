@@ -33,7 +33,11 @@ pub fn write_report(
                 "Frameworks: {}",
                 display_frameworks(&result.project.frameworks)
             )?;
-            writeln!(writer, "Files discovered: {}", result.statistics.files_discovered)?;
+            writeln!(
+                writer,
+                "Files discovered: {}",
+                result.statistics.files_discovered
+            )?;
             writeln!(writer, "Files parsed: {}", result.statistics.files_parsed)?;
             writeln!(writer, "Files skipped: {}", result.statistics.files_skipped)?;
             writeln!(writer, "Diagnostics: {}", result.statistics.diagnostics)?;
@@ -286,7 +290,9 @@ mod tests {
         );
         assert_eq!(result["ruleIndex"], 0);
         assert_eq!(
-            result["codeFlows"][0]["threadFlows"][0]["locations"].as_array().map(Vec::len),
+            result["codeFlows"][0]["threadFlows"][0]["locations"]
+                .as_array()
+                .map(Vec::len),
             Some(2)
         );
     }

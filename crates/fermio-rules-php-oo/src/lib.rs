@@ -46,10 +46,7 @@ impl SqlTaintFact {
         fact
     }
 
-    fn merge_for_concatenation(
-        facts: Vec<Self>,
-        location: &SourceLocation,
-    ) -> Option<Self> {
+    fn merge_for_concatenation(facts: Vec<Self>, location: &SourceLocation) -> Option<Self> {
         let sanitized = facts.iter().all(|fact| fact.sanitized);
         let mut merged = facts.into_iter().next()?;
         merged.sanitized = sanitized;
@@ -161,11 +158,9 @@ fn analyze_module(module: &ModuleIr) -> Vec<Finding> {
                     continue;
                 }
 
-                if let Some(argument) = cross_domain_passthrough_argument(
-                    target,
-                    *call_kind,
-                    arguments,
-                ) {
+                if let Some(argument) =
+                    cross_domain_passthrough_argument(target, *call_kind, arguments)
+                {
                     if let Some(fact) = state.taint.get(&argument) {
                         state.taint.insert(
                             *output,
@@ -257,9 +252,7 @@ fn sql_sanitizer_argument(
         },
         CallKind::Function => match normalized.as_str() {
             "mysql_real_escape_string" => arguments.first().copied(),
-            "mysqli_escape_string" | "mysqli_real_escape_string" => {
-                arguments.get(1).copied()
-            }
+            "mysqli_escape_string" | "mysqli_real_escape_string" => arguments.get(1).copied(),
             "pg_escape_identifier" | "pg_escape_literal" | "pg_escape_string" => {
                 arguments.last().copied()
             }
@@ -287,10 +280,7 @@ fn cross_domain_passthrough_argument(
 }
 
 fn normalized_target(target: &str) -> String {
-    target
-        .trim()
-        .trim_start_matches('\\')
-        .to_ascii_lowercase()
+    target.trim().trim_start_matches('\\').to_ascii_lowercase()
 }
 
 fn display_target(target: &str) -> &str {
@@ -376,13 +366,7 @@ mod tests {
     #[test]
     fn reports_tainted_pdo_query() {
         let mut instructions = tainted_input("$_GET");
-        instructions.push(call(
-            2,
-            "PDO::query",
-            CallKind::Method,
-            vec![ValueId(1)],
-            2,
-        ));
+        instructions.push(call(2, "PDO::query", CallKind::Method, vec![ValueId(1)], 2));
         let findings = findings(instructions);
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].cwe.as_deref(), Some("CWE-89"));
@@ -408,20 +392,8 @@ mod tests {
     #[test]
     fn pdo_quote_suppresses_object_sql_finding() {
         let mut instructions = tainted_input("$_REQUEST");
-        instructions.push(call(
-            2,
-            "PDO::quote",
-            CallKind::Method,
-            vec![ValueId(1)],
-            2,
-        ));
-        instructions.push(call(
-            3,
-            "PDO::query",
-            CallKind::Method,
-            vec![ValueId(2)],
-            3,
-        ));
+        instructions.push(call(2, "PDO::quote", CallKind::Method, vec![ValueId(1)], 2));
+        instructions.push(call(3, "PDO::query", CallKind::Method, vec![ValueId(2)], 3));
         assert!(findings(instructions).is_empty());
     }
 
@@ -455,26 +427,14 @@ mod tests {
             vec![ValueId(1)],
             2,
         ));
-        instructions.push(call(
-            3,
-            "PDO::exec",
-            CallKind::Method,
-            vec![ValueId(2)],
-            3,
-        ));
+        instructions.push(call(3, "PDO::exec", CallKind::Method, vec![ValueId(2)], 3));
         assert_eq!(findings(instructions).len(), 1);
     }
 
     #[test]
     fn ignores_untyped_query_method() {
         let mut instructions = tainted_input("$_GET");
-        instructions.push(call(
-            2,
-            "query",
-            CallKind::Method,
-            vec![ValueId(1)],
-            2,
-        ));
+        instructions.push(call(2, "query", CallKind::Method, vec![ValueId(1)], 2));
         assert!(findings(instructions).is_empty());
     }
 
@@ -486,13 +446,7 @@ mod tests {
                 value: fermio_ir::LiteralValue::String("'SELECT 1'".to_string()),
                 location: location(1),
             },
-            call(
-                1,
-                "PDO::query",
-                CallKind::Method,
-                vec![ValueId(0)],
-                1,
-            ),
+            call(1, "PDO::query", CallKind::Method, vec![ValueId(0)], 1),
         ];
         assert!(findings(instructions).is_empty());
     }

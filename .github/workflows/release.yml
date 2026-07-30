@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify release tag and changelog
+        run: python3 scripts/verify_release_version.py --tag "${GITHUB_REF_NAME}"
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - name: Validate locked workspace metadata
+        run: cargo metadata --locked --no-deps --format-version 1
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            python: python3
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            python: python
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            python: python3
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            python: python3
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }} -p fermio-cli
+
+      - name: Package release archive
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/fermio-sec"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            binary="${binary}.exe"
+          fi
+          ${{ matrix.python }} scripts/package_release.py \
+            --binary "$binary" \
+            --target "${{ matrix.target }}" \
+            --version "${GITHUB_REF_NAME}" \
+            --output-dir dist
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: fermio-sec-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fermio-sec-*
+          path: dist
+          merge-multiple: true
+
+      - name: Add release lockfile and checksum
+        run: |
+          cp Cargo.lock "dist/fermio-sec-${GITHUB_REF_NAME}-Cargo.lock"
+          cd dist
+          sha256sum "fermio-sec-${GITHUB_REF_NAME}-Cargo.lock" > "fermio-sec-${GITHUB_REF_NAME}-Cargo.lock.sha256"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_flags=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag \
+            --generate-notes \
+            --title "${GITHUB_REF_NAME}" \
+            "${release_flags[@]}"

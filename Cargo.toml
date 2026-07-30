@@ -15,9 +15,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-rc.1"
 edition = "2021"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 authors = ["Fermio Technologies"]
 rust-version = "1.88"
 
@@ -33,3 +33,9 @@ toml = "0.8"
 tree-sitter = "0.24"
 tree-sitter-php = "0.23"
 walkdir = "2.5"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

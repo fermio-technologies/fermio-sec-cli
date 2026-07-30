@@ -311,9 +311,7 @@ fn split_scopes<'a>(module: &'a ModuleIr) -> (Vec<&'a Instruction>, Vec<Function
     (top_level, functions)
 }
 
-fn build_function_summaries(
-    functions: &[FunctionRegion<'_>],
-) -> HashMap<String, FunctionSummary> {
+fn build_function_summaries(functions: &[FunctionRegion<'_>]) -> HashMap<String, FunctionSummary> {
     let mut summaries = HashMap::new();
 
     for _ in 0..=functions.len() {
@@ -548,10 +546,7 @@ fn analyze_scope(
                             *output,
                             fact.sanitized(
                                 TaintDomain::Html,
-                                format!(
-                                    "Encoded for HTML output by `{}`",
-                                    normalize_call(target)
-                                ),
+                                format!("Encoded for HTML output by `{}`", normalize_call(target)),
                                 location,
                             ),
                         );
@@ -695,8 +690,7 @@ fn apply_sink_summary(
             format!("Passed to function `{}`", normalize_call(target)),
             location,
         );
-        fact.steps
-            .extend(dependency.steps.iter().skip(1).cloned());
+        fact.steps.extend(dependency.steps.iter().skip(1).cloned());
         events.push(SinkEvent {
             domain: dependency.domain,
             sink: dependency.sink.clone(),
@@ -1066,10 +1060,13 @@ fn sql_sanitizer_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId
 fn sql_sink_argument(target: &str, arguments: &[ValueId]) -> Option<ValueId> {
     match normalized_call_name(target).as_str() {
         "mysql_query" => arguments.first().copied(),
-        "mysqli_execute_query" | "mysqli_multi_query" | "mysqli_query"
-        | "mysqli_real_query" | "odbc_exec" | "sqlsrv_prepare" | "sqlsrv_query" => {
-            arguments.get(1).copied()
-        }
+        "mysqli_execute_query"
+        | "mysqli_multi_query"
+        | "mysqli_query"
+        | "mysqli_real_query"
+        | "odbc_exec"
+        | "sqlsrv_prepare"
+        | "sqlsrv_query" => arguments.get(1).copied(),
         "pg_prepare" | "pg_query" | "pg_send_query" => arguments.last().copied(),
         "pg_query_params" | "pg_send_query_params" => {
             if arguments.len() >= 3 {
@@ -1202,7 +1199,10 @@ mod tests {
     fn function_start(name: &str, parameters: &[&str], line: usize) -> Instruction {
         Instruction::FunctionStart {
             name: name.to_string(),
-            parameters: parameters.iter().map(|value| (*value).to_string()).collect(),
+            parameters: parameters
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             location: location(line),
         }
     }
@@ -1240,12 +1240,7 @@ mod tests {
 
         let mut sql = tainted_input("$_POST");
         sql.push(literal(2, "'connection'", 2));
-        sql.push(call(
-            3,
-            "mysqli_query",
-            vec![ValueId(2), ValueId(1)],
-            3,
-        ));
+        sql.push(call(3, "mysqli_query", vec![ValueId(2), ValueId(1)], 3));
         let sql_module = ModuleIr {
             language: "php".to_string(),
             path: "src/sql.php".to_string(),
@@ -1334,12 +1329,7 @@ mod tests {
             function_start("run_query", &["$connection", "$query"], 1),
             parameter_read(10, "$connection", 2),
             parameter_read(11, "$query", 2),
-            call(
-                12,
-                "mysqli_query",
-                vec![ValueId(10), ValueId(11)],
-                2,
-            ),
+            call(12, "mysqli_query", vec![ValueId(10), ValueId(11)], 2),
             function_end("run_query", 3),
             function_start("render", &["$value"], 4),
             parameter_read(13, "$value", 5),
@@ -1357,12 +1347,7 @@ mod tests {
                 location: location(7),
             },
             literal(2, "'connection'", 7),
-            call(
-                3,
-                "run_query",
-                vec![ValueId(2), ValueId(1)],
-                8,
-            ),
+            call(3, "run_query", vec![ValueId(2), ValueId(1)], 8),
             call(4, "render", vec![ValueId(1)], 9),
         ];
         let module = ModuleIr {
