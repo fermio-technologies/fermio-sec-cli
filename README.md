@@ -16,6 +16,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
 - PHP command, SQL and reflected-XSS taint analysis
+- Receiver-aware PDO and MySQLi SQL taint analysis
 - Limited same-file function return and sink summaries
 - SARIF code-flow traces for taint findings
 - `.gitignore` and `.fermioignore` support
@@ -42,9 +43,9 @@ The functions `escapeshellarg()` and `escapeshellcmd()` are recognized as comman
 
 ## SQL taint analysis
 
-The SQL analysis reports `FERMIO-PHP-TAINT-SQL-001` when PHP superglobal input reaches a supported procedural query API at its SQL argument position.
+The procedural SQL analysis reports `FERMIO-PHP-TAINT-SQL-001` when PHP superglobal input reaches a supported procedural query API at its SQL argument position.
 
-The initial sink set includes:
+The initial procedural sink set includes:
 
 - `mysql_query`
 - `mysqli_query`, `mysqli_multi_query`, `mysqli_real_query` and `mysqli_execute_query`
@@ -55,6 +56,19 @@ The initial sink set includes:
 The initial SQL sanitizer set includes `mysql_real_escape_string`, the procedural MySQLi escape functions, and PostgreSQL string, literal and identifier escaping functions. Sanitization is domain-specific: SQL escaping does not suppress command-injection or reflected-XSS findings.
 
 Prepared statements are not treated as safe merely because a function is named `prepare`; tainted SQL structure passed to `pg_prepare` or `sqlsrv_prepare` is still reported. Parameter values passed separately to parameterized APIs are outside the SQL-text argument and are not classified as query structure.
+
+### Receiver-aware PDO and MySQLi analysis
+
+`FERMIO-PHP-TAINT-SQL-OO-001` covers object-oriented database calls when the frontend can prove that the receiver originated from `new PDO`, `new mysqli`, a direct alias of such a variable, or an inline object creation.
+
+The initial object sink set includes:
+
+- `PDO::query`, `PDO::exec` and `PDO::prepare`
+- `mysqli::query`, `mysqli::real_query`, `mysqli::multi_query`, `mysqli::execute_query` and `mysqli::prepare`
+
+`PDO::quote`, `mysqli::real_escape_string` and `mysqli::escape_string` are recognized as SQL sanitizers for this rule. Procedural SQL sanitizers also remain effective when their result reaches an object sink. Shell and HTML escaping remain tainted for SQL use.
+
+The receiver proof is intentionally conservative. Generic calls such as `$service->query($sql)` are ignored. Reassigning a proven database variable to an unknown expression clears its inferred type. Namespaced user classes such as `App\PDO` are not treated as the native `PDO` class. Import aliases, dependency-injection containers, typed properties, method return types and cross-file type resolution are deferred.
 
 ## Reflected XSS analysis
 
@@ -68,7 +82,7 @@ This first slice models direct PHP output as an HTML response context. It does n
 
 ## Limited function summaries
 
-Named, same-file PHP functions receive both return summaries and sink summaries. Taint and domain-specific sanitizer state can cross a helper return, while tainted arguments passed into helpers can be followed to command, SQL and HTML sinks inside those helpers.
+Named, same-file PHP functions receive both return summaries and sink summaries. Taint and domain-specific sanitizer state can cross a helper return, while tainted arguments passed into helpers can be followed to command, procedural SQL and HTML sinks inside those helpers.
 
 Return summaries support flows such as:
 
@@ -94,7 +108,7 @@ The finding is anchored at the tainted helper call and the redacted trace contin
 
 Summaries are calculated to a bounded fixed point, allowing short chains of named helper calls. Sanitization can occur before entering a helper or inside it and remains specific to command, SQL or HTML use. Functions that directly return or sink superglobal input are also analyzed. Local assignments remain isolated by function scope.
 
-This increment does not model methods, closures, anonymous functions, namespaces across files, omitted default arguments, recursive behavior, references or variadic argument expansion. It also does not yet build cross-file summaries or model framework and dependency-injection call resolution.
+Function summaries do not yet model method bodies, closures, anonymous functions, namespaces across files, omitted default arguments, recursive behavior, references or variadic argument expansion. Object SQL analysis currently covers direct receiver-proven calls rather than method or service-container call graphs.
 
 SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations, helper calls, helper returns and the sink. The trace does not contain runtime values or source snippets.
 
