@@ -62,6 +62,11 @@ jobs:
       - name: Validate locked workspace metadata
         run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
 
+      - name: Validate release metadata
+        run: |
+          python3 -m py_compile scripts/package_release.py scripts/verify_release_version.py
+          python3 scripts/verify_release_version.py --tag v0.1.0-rc.1
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
