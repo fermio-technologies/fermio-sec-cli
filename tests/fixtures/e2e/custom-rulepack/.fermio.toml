@@ -1,0 +1,5 @@
+schema_version = 1
+
+[rulepacks]
+builtins = false
+paths = ["company-rulepack.toml"]
