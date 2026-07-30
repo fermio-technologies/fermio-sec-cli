@@ -16,7 +16,7 @@ The first release targets PHP and its main ecosystems. The core architecture rem
 - Stable SHA-256 finding fingerprints
 - Local fingerprint baselines
 - PHP command, SQL and reflected-XSS taint analysis
-- Limited same-file function return summaries
+- Limited same-file function return and sink summaries
 - SARIF code-flow traces for taint findings
 - `.gitignore` and `.fermioignore` support
 - File-count and file-size scan limits
@@ -68,9 +68,9 @@ This first slice models direct PHP output as an HTML response context. It does n
 
 ## Limited function summaries
 
-Named, same-file PHP functions receive parameter-to-return summaries. Taint and domain-specific sanitizer state can cross a helper return before reaching a command, SQL or HTML output sink.
+Named, same-file PHP functions receive both return summaries and sink summaries. Taint and domain-specific sanitizer state can cross a helper return, while tainted arguments passed into helpers can be followed to command, SQL and HTML sinks inside those helpers.
 
-For example, the analyzer can follow the input through this helper:
+Return summaries support flows such as:
 
 ```php
 function passthrough($value) {
@@ -80,11 +80,23 @@ function passthrough($value) {
 echo passthrough($_GET['name']);
 ```
 
-Summaries are calculated to a bounded fixed point, allowing short chains of named helper calls. Functions that directly return superglobal input are also summarized. Local assignments are analyzed in an isolated function scope and do not leak into module-level variables.
+Sink summaries support flows where the dangerous operation is hidden behind an application helper:
 
-This increment does not model methods, closures, anonymous functions, namespaces across files, omitted default arguments, recursive behavior, references, variadic argument expansion, or parameters flowing directly into sinks inside a helper.
+```php
+function run_command($command) {
+    system($command);
+}
 
-SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations, helper returns and the sink. The trace does not contain runtime values or source snippets.
+run_command($_GET['cmd']);
+```
+
+The finding is anchored at the tainted helper call and the redacted trace continues through the parameter read to the internal sink. Sink summaries preserve argument positions, so connection handles are not mistaken for SQL text in wrappers around APIs such as `mysqli_query()`.
+
+Summaries are calculated to a bounded fixed point, allowing short chains of named helper calls. Sanitization can occur before entering a helper or inside it and remains specific to command, SQL or HTML use. Functions that directly return or sink superglobal input are also analyzed. Local assignments remain isolated by function scope.
+
+This increment does not model methods, closures, anonymous functions, namespaces across files, omitted default arguments, recursive behavior, references or variadic argument expansion. It also does not yet build cross-file summaries or model framework and dependency-injection call resolution.
+
+SARIF output includes redacted `codeFlows` showing structural steps such as the input source, propagation operations, helper calls, helper returns and the sink. The trace does not contain runtime values or source snippets.
 
 ## Baseline workflow
 
